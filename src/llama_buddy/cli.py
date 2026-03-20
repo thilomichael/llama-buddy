@@ -35,7 +35,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     # download
     dl_p = sub.add_parser("download", help="Download a model")
-    dl_p.add_argument("model", help="HuggingFace model ID (e.g. org/model-GGUF:Q4_K_M)")
+    dl_p.add_argument(
+        "model",
+        nargs="?",
+        help="HuggingFace model ID (e.g. org/model-GGUF:Q4_K_M)",
+    )
     dl_p.add_argument("--alias", help="Custom alias for the model")
 
     # remove
@@ -115,7 +119,7 @@ def _run(argv: list[str] | None = None) -> None:
     elif args.command == "download":
         from llama_buddy.download import download
 
-        download(args.model, args.alias)
+        download(args.model or None, args.alias)
 
     elif args.command == "remove":
         from llama_buddy.download import remove
