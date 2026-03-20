@@ -85,6 +85,9 @@ llb start
 # List all models
 llb models
 
+# Chat with a model (uses llama-cli)
+llb chat
+
 # Inspect model metadata
 llb info
 
