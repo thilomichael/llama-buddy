@@ -137,7 +137,7 @@ Run `llb settings` and select **Model Settings** to configure per-model override
 
 ```bash
 # Clone and install
-git clone https://github.com/thimic/llama-buddy.git
+git clone https://github.com/thilomichael/llama-buddy.git
 cd llama-buddy
 uv sync
 

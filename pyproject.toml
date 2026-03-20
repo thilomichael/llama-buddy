@@ -31,9 +31,9 @@ dependencies = [
 llb = "llama_buddy.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/thimic/llama-buddy"
-Repository = "https://github.com/thimic/llama-buddy"
-Issues = "https://github.com/thimic/llama-buddy/issues"
+Homepage = "https://github.com/thilomichael/llama-buddy"
+Repository = "https://github.com/thilomichael/llama-buddy"
+Issues = "https://github.com/thilomichael/llama-buddy/issues"
 
 [build-system]
 requires = ["uv_build>=0.10.7,<0.11.0"]
