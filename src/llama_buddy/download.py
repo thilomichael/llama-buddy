@@ -91,17 +91,85 @@ def _search_hf(query: str, limit: int = 20) -> list[dict]:
 
 
 def _get_repo_files(repo_id: str) -> list[dict]:
-    """Get GGUF files in a HF repo with sizes (excludes mmproj)."""
+    """Get GGUF files in a HF repo with sizes (excludes mmproj).
+
+    Checks both the repo root and subdirectories.  Split-model shards
+    (e.g. ``model-00001-of-00003.gguf``) are grouped into a single entry
+    whose ``"path"`` is the first shard, ``"size"`` is the total across all
+    shards, and ``"shard_files"`` lists every shard dict.
+    """
     with httpx.Client(timeout=15, follow_redirects=True) as client:
         resp = client.get(f"{HF_API}/{repo_id}/tree/main")
         resp.raise_for_status()
-        files = resp.json()
-    return [
-        f
-        for f in files
-        if f.get("path", "").endswith(".gguf")
-        and "mmproj" not in f.get("path", "").lower()
-    ]
+        top_level = resp.json()
+
+        gguf_files: list[dict] = []
+        subdirs: list[str] = []
+        for entry in top_level:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("type") == "directory":
+                subdirs.append(entry["path"])
+            elif (
+                entry.get("path", "").endswith(".gguf")
+                and "mmproj" not in entry.get("path", "").lower()
+            ):
+                gguf_files.append(entry)
+
+        # If no GGUF files at root, check subdirectories
+        if not gguf_files and subdirs:
+            for subdir in subdirs:
+                resp = client.get(
+                    f"{HF_API}/{repo_id}/tree/main/{subdir}"
+                )
+                if resp.status_code != 200:
+                    continue
+                for entry in resp.json():
+                    if not isinstance(entry, dict):
+                        continue
+                    if (
+                        entry.get("path", "").endswith(".gguf")
+                        and "mmproj" not in entry.get("path", "").lower()
+                    ):
+                        gguf_files.append(entry)
+
+    return _merge_shards(gguf_files)
+
+
+_SHARD_RE = re.compile(r"-(\d{5})-of-(\d{5})\.gguf$")
+
+
+def _merge_shards(files: list[dict]) -> list[dict]:
+    """Group split-model shards into single entries.
+
+    Shard files matching ``*-00001-of-00005.gguf`` are merged into one dict
+    keyed by the first shard.  Non-shard files pass through unchanged.
+    """
+    shard_groups: dict[str, list[dict]] = {}
+    singles: list[dict] = []
+
+    for f in files:
+        path = f.get("path", "")
+        m = _SHARD_RE.search(path)
+        if m:
+            # Key = path with shard suffix stripped
+            key = path[: m.start()]
+            shard_groups.setdefault(key, []).append(f)
+        else:
+            singles.append(f)
+
+    merged: list[dict] = list(singles)
+    for _key, shards in sorted(shard_groups.items()):
+        shards.sort(key=lambda s: s["path"])
+        total_size = sum(_file_size(s) for s in shards)
+        merged.append(
+            {
+                "path": shards[0]["path"],
+                "size": total_size,
+                "shard_files": shards,
+            }
+        )
+    return merged
 
 
 # ---------------------------------------------------------------------------
@@ -419,15 +487,17 @@ def _render_file_menu(
         for f in group_files:
             path = f["path"]
             size = _human_size(_file_size(f))
+            shards = f.get("shard_files")
+            shard_info = f"  {len(shards)} parts" if shards else ""
             is_sel = idx == selected
 
             if is_sel:
                 text.append("  > ", style="bold cyan")
                 text.append(path, style="bold cyan")
-                text.append(f"  ({size})", style="cyan")
+                text.append(f"  ({size}{shard_info})", style="cyan")
             else:
                 text.append(f"    {path}", style="dim")
-                text.append(f"  ({size})", style="dim italic")
+                text.append(f"  ({size}{shard_info})", style="dim italic")
             text.append("\n")
             idx += 1
         text.append("\n")
@@ -580,8 +650,8 @@ def _create_manifest(
 
 def _resolve_download_target(
     model_id: str,
-) -> tuple[str, str, str, int]:
-    """Resolve a model_id to (repo_id, filename, quant, size).
+) -> tuple[str, dict, str]:
+    """Resolve a model_id to (repo_id, chosen_file_dict, quant).
 
     For interactive mode (model_id is None), call the pickers instead.
     """
@@ -620,12 +690,74 @@ def _resolve_download_target(
             raise SystemExit(1)
         chosen = matches[0]
 
-    return repo_id, chosen["path"], quant, _file_size(chosen)
+    return repo_id, chosen, quant
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
+
+def _download_files(
+    repo_id: str,
+    chosen: dict,
+    cache_dir: Path,
+    org: str,
+    repo_name: str,
+    model_id: str,
+) -> str:
+    """Download one or more GGUF files for a model.
+
+    Returns the first shard's filename (used for the manifest).
+    """
+    shard_files = chosen.get("shard_files")
+    if shard_files:
+        file_list = shard_files
+    else:
+        file_list = [chosen]
+
+    total_size = sum(_file_size(f) for f in file_list)
+    first_filename = file_list[0]["path"]
+
+    # Create manifest early referencing the first shard
+    _create_manifest(cache_dir, org, repo_name,
+                     _extract_quant(first_filename), first_filename,
+                     total_size)
+
+    all_cached = True
+    for f in file_list:
+        filename = f["path"]
+        size = _file_size(f)
+        cache_filename = f"{org}_{repo_name}_{filename.replace('/', '_')}"
+        dest = cache_dir / cache_filename
+
+        if dest.exists() and dest.stat().st_size >= size > 0:
+            console.print(
+                f"File already cached: {dest.name}", style="yellow"
+            )
+            continue
+
+        all_cached = False
+        if shard_files:
+            shard_idx = file_list.index(f) + 1
+            console.print(
+                f"Downloading part {shard_idx}/{len(file_list)}"
+                f" ({_human_size(size)})…"
+            )
+        else:
+            action = "Resuming" if dest.exists() else "Downloading"
+            console.print(
+                f"{action} [bold]{model_id}[/bold]"
+                f" ({_human_size(total_size)})…"
+            )
+        etag = _download_gguf(repo_id, filename, dest, size)
+        if etag:
+            (cache_dir / f"{cache_filename}.etag").write_text(etag)
+
+    if all_cached and shard_files:
+        console.print("All parts already cached.", style="yellow")
+
+    return first_filename
 
 
 def download(model_id: str | None = None, alias: str | None = None) -> None:
@@ -635,10 +767,12 @@ def download(model_id: str | None = None, alias: str | None = None) -> None:
         if isinstance(result, dict):
             # Resuming a partial download
             repo_id = result["repo_id"]
-            filename = result["filename"]
             quant = result["quant"]
-            size = result["size"]
             model_id = result["model_id"]
+            chosen = {
+                "path": result["filename"],
+                "size": result["size"],
+            }
         else:
             repo_id = result
             console.print(f"\nFetching files for [bold]{repo_id}[/bold]…")
@@ -657,12 +791,10 @@ def download(model_id: str | None = None, alias: str | None = None) -> None:
                 raise SystemExit(1)
 
             chosen = _pick_quant_interactive(repo_id, files)
-            filename = chosen["path"]
-            size = _file_size(chosen)
-            quant = _extract_quant(filename)
+            quant = _extract_quant(chosen["path"])
             model_id = f"{repo_id}:{quant}"
     else:
-        repo_id, filename, quant, size = _resolve_download_target(model_id)
+        repo_id, chosen, quant = _resolve_download_target(model_id)
         model_id = f"{repo_id}:{quant}"
 
     # Prepare cache paths
@@ -670,23 +802,7 @@ def download(model_id: str | None = None, alias: str | None = None) -> None:
     cache_dir = get_cache_dir()
     cache_dir.mkdir(parents=True, exist_ok=True)
 
-    cache_filename = f"{org}_{repo_name}_{filename.replace('/', '_')}"
-    dest = cache_dir / cache_filename
-
-    # Create manifest early so partial downloads are discoverable
-    _create_manifest(cache_dir, org, repo_name, quant, filename, size)
-
-    # Download (or resume) if file is missing or incomplete
-    if dest.exists() and dest.stat().st_size >= size > 0:
-        console.print(f"File already cached: {dest.name}", style="yellow")
-    else:
-        action = "Resuming" if dest.exists() else "Downloading"
-        console.print(
-            f"{action} [bold]{model_id}[/bold] ({_human_size(size)})…"
-        )
-        etag = _download_gguf(repo_id, filename, dest, size)
-        if etag:
-            (cache_dir / f"{cache_filename}.etag").write_text(etag)
+    _download_files(repo_id, chosen, cache_dir, org, repo_name, model_id)
 
     # Add to preset (if not already there)
     preset = read_preset()
