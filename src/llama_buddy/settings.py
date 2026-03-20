@@ -80,6 +80,12 @@ SETTING_META: dict[str, dict] = {
 
 # Per-model INI keys and their display metadata
 MODEL_SETTING_META: dict[str, dict] = {
+    "alias": {
+        "label": "Alias",
+        "description": "Custom name for this model",
+        "type": "text",
+        "default": "",
+    },
     "c": {
         "label": "Context Size",
         "description": "Override context size (0 = use global/model default)",
@@ -215,22 +221,23 @@ def _run_kv_editor(
     on_extra(index) -> None: called when an extra item is selected
     """
     require_tty()
-    keys = list(meta_map.keys())
-    total = len(keys) + (len(extra_items) if extra_items else 0)
-
     selected = 0
     editing = False
     edit_buffer = ""
 
     def build_items():
-        return [(k, meta_map[k], get_value(k)) for k in keys]
+        keys = list(meta_map.keys())
+        return keys, [(k, meta_map[k], get_value(k)) for k in keys]
 
     while True:
         pending_extra: int | None = None
+        keys, items = build_items()
+        total = len(keys) + (len(extra_items) if extra_items else 0)
+        selected = min(selected, max(total - 1, 0))
 
         with Live(
             _render_kv_menu(
-                title, build_items(), selected, editing, edit_buffer, extra_items
+                title, items, selected, editing, edit_buffer, extra_items
             ),
             console=console,
             auto_refresh=False,
@@ -252,6 +259,8 @@ def _run_kv_editor(
                         elif meta["type"] == "choice":
                             if edit_buffer in meta["choices"]:
                                 set_value(setting_key, edit_buffer)
+                        elif meta["type"] == "text":
+                            set_value(setting_key, edit_buffer)
                         editing = False
                         edit_buffer = ""
                     elif key in ("\x1b", "ctrl-c"):
@@ -290,10 +299,12 @@ def _run_kv_editor(
                         on_save()
                         return
 
+                keys, items = build_items()
+                total = len(keys) + (len(extra_items) if extra_items else 0)
                 live.update(
                     _render_kv_menu(
                         title,
-                        build_items(),
+                        items,
                         selected,
                         editing,
                         edit_buffer,
@@ -362,21 +373,37 @@ def _edit_model_settings() -> None:
     _edit_single_model(model_id)
 
 
+def _build_model_meta(model_id: str, preset) -> dict[str, dict]:
+    """Build meta map for a model, including any custom keys from the INI."""
+    meta = dict(MODEL_SETTING_META)
+    # Add any existing keys not in the standard set
+    if preset.has_section(model_id):
+        for key in preset.options(model_id):
+            if key not in meta and key != "version":
+                meta[key] = {
+                    "label": key,
+                    "description": "Custom setting",
+                    "type": "text",
+                    "default": "",
+                }
+    return meta
+
+
 def _edit_single_model(model_id: str) -> None:
     """Edit settings for a single model in the preset INI file."""
     from llama_buddy.models import get_model_name
 
     preset = read_preset()
     display_name = get_model_name(model_id) or model_id
+    meta_map = _build_model_meta(model_id, preset)
 
     def get_value(key: str) -> str:
-        meta = MODEL_SETTING_META[key]
-        return preset.get(model_id, key, fallback=meta["default"])
+        default = meta_map[key].get("default", "")
+        return preset.get(model_id, key, fallback=default)
 
     def set_value(key: str, value: str) -> None:
-        meta = MODEL_SETTING_META[key]
-        if value == meta["default"]:
-            # Remove override if set back to default
+        default = meta_map[key].get("default", "")
+        if value == default:
             preset.remove_option(model_id, key)
         else:
             preset.set(model_id, key, value)
@@ -388,10 +415,80 @@ def _edit_single_model(model_id: str) -> None:
             style="green",
         )
 
+    def on_extra(idx: int) -> None:
+        if idx == 0:
+            _add_custom_setting(model_id, preset, meta_map)
+
     _run_kv_editor(
         title=f"Model Settings: {display_name}",
-        meta_map=MODEL_SETTING_META,
+        meta_map=meta_map,
         get_value=get_value,
         set_value=set_value,
         on_save=on_save,
+        extra_items=["Add custom setting >"],
+        on_extra=on_extra,
     )
+
+
+def _add_custom_setting(
+    model_id: str, preset, meta_map: dict[str, dict]
+) -> None:
+    """Prompt for a custom key=value pair and add it to the model."""
+    require_tty()
+
+    # Prompt for key
+    key_buffer = ""
+    value_buffer = ""
+    phase = "key"  # "key" -> "value"
+
+    def render() -> Text:
+        text = Text()
+        text.append("  Add Custom Setting\n\n", style="bold")
+        text.append("  Key: ", style="bold cyan" if phase == "key" else "")
+        if phase == "key":
+            text.append(key_buffer, style="bold underline")
+            text.append("_", style="bold blink")
+        else:
+            text.append(key_buffer)
+        text.append("\n")
+        text.append("  Value: ", style="bold cyan" if phase == "value" else "dim")
+        if phase == "value":
+            text.append(value_buffer, style="bold underline")
+            text.append("_", style="bold blink")
+        text.append("\n\n")
+        text.append("  Enter confirm  Esc cancel", style="dim italic")
+        return text
+
+    with Live(render(), console=console, auto_refresh=False, transient=True) as live:
+        while True:
+            key = read_key()
+            if key in ("\x1b", "ctrl-c"):
+                return
+            elif key == "enter":
+                if phase == "key":
+                    if key_buffer.strip():
+                        phase = "value"
+                else:
+                    k = key_buffer.strip()
+                    if k and k not in meta_map:
+                        preset.set(model_id, k, value_buffer)
+                        meta_map[k] = {
+                            "label": k,
+                            "description": "Custom setting",
+                            "type": "text",
+                            "default": "",
+                        }
+                    return
+            elif key == "backspace":
+                if phase == "key":
+                    key_buffer = key_buffer[:-1]
+                else:
+                    value_buffer = value_buffer[:-1]
+            elif len(key) == 1 and key.isprintable():
+                if phase == "key":
+                    key_buffer += key
+                else:
+                    value_buffer += key
+            else:
+                continue
+            live.update(render(), refresh=True)

@@ -63,6 +63,7 @@ def start(extra_args: list[str] | None = None) -> None:
 
     settings = load_settings()
     ensure_config_dir()
+
     log_fh = open(LOG_FILE, "a")
 
     cmd = [binary, "--models-preset", str(PRESET_FILE)]

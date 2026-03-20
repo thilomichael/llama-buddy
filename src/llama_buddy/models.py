@@ -6,7 +6,12 @@ import httpx
 from rich.console import Console
 from rich.table import Table
 
-from llama_buddy.config import DEFAULT_PORT, find_model_gguf_files, get_cache_dir
+from llama_buddy.config import (
+    DEFAULT_PORT,
+    find_model_gguf_files,
+    get_cache_dir,
+    get_gguf_model_groups,
+)
 from llama_buddy.gguf import read_metadata
 
 console = Console()
@@ -110,7 +115,15 @@ def list_models(port: int = DEFAULT_PORT) -> None:
         return
 
     sizes = compute_model_sizes()
-    all_ids = {m["id"] for m in models}
+    gguf_groups = get_gguf_model_groups()
+    model_map = {m["id"]: m for m in models}
+
+    # Build ordered list: group models that share a GGUF, keep ungrouped ones
+    grouped_ids: set[str] = set()
+    for group in gguf_groups:
+        if len(group) > 1:
+            for mid in group:
+                grouped_ids.add(mid)
 
     table = Table(title="Models", border_style="cyan")
     table.add_column("Name", style="bold")
@@ -120,25 +133,52 @@ def list_models(port: int = DEFAULT_PORT) -> None:
     table.add_column("Size", justify="right")
     table.add_column("Model ID", style="dim")
 
-    for m in models:
-        model_id = m["id"]
-        if is_bare_repo(model_id, all_ids):
-            continue
-
+    def add_model_row(model_id: str, prefix: str = "") -> None:
+        m = model_map.get(model_id)
+        if m is None:
+            return
         meta = get_model_meta(model_id)
         name = meta.get("name", model_id)
         ctx_str = meta.get("context_length", "-")
         aliases = m.get("aliases", [])
         alias = aliases[0] if aliases else ""
-
         is_loaded = m.get("active_slot_count", 0) > 0
         status_str = "[green]loaded[/green]" if is_loaded else "[dim]unloaded[/dim]"
-
         base_repo = model_id.split(":")[0]
         size = sizes.get(base_repo, 0)
         size_str = format_size(size) if size else "-"
+        display_name = f"{prefix}{name}" if prefix else name
+        table.add_row(display_name, alias, status_str, ctx_str, size_str, model_id)
 
-        table.add_row(name, alias, status_str, ctx_str, size_str, model_id)
+    # Render grouped models with tree structure, then ungrouped
+    for group in sorted(gguf_groups, key=lambda g: g[0].lower()):
+        present = [mid for mid in group if mid in model_map]
+        if not present:
+            continue
+        if len(present) == 1:
+            add_model_row(present[0])
+        else:
+            # Group header row
+            meta = get_model_meta(present[0])
+            shared_name = meta.get("name", present[0].split(":")[0])
+            base_repo = present[0].split(":")[0]
+            size = sizes.get(base_repo, 0)
+            size_str = format_size(size) if size else "-"
+            table.add_row(
+                f"[bold]{shared_name}[/bold]",
+                "", "", "", size_str, "",
+            )
+            for i, mid in enumerate(present):
+                is_last = i == len(present) - 1
+                prefix = "└─ " if is_last else "├─ "
+                add_model_row(mid, prefix)
+
+    # Add any models from the API that weren't in any manifest group
+    for m in models:
+        if m["id"] not in grouped_ids and not any(
+            m["id"] in g for g in gguf_groups
+        ):
+            add_model_row(m["id"])
 
     if table.row_count == 0:
         console.print("No models configured.", style="yellow")

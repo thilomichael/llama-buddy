@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import subprocess
 
-from llama_buddy.config import LOG_FILE
+from llama_buddy.config import LOG_FILE, sync_preset_with_cache
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -83,6 +83,8 @@ def _run(argv: list[str] | None = None) -> None:
     if args.command is None:
         parser.print_help()
         raise SystemExit(0)
+
+    sync_preset_with_cache()
 
     if args.command == "start":
         from llama_buddy.server import start
