@@ -11,7 +11,6 @@ import time
 from rich.console import Console
 
 from llama_buddy.config import (
-    DEFAULT_IDLE_SECONDS,
     LOG_FILE,
     PRESET_FILE,
     ensure_config_dir,
@@ -36,6 +35,8 @@ def find_server_binary() -> str | None:
 
 
 def start(extra_args: list[str] | None = None) -> None:
+    from llama_buddy.settings import load_settings
+
     pid = read_pid()
     if pid is not None and is_process_running(pid):
         console.print(
@@ -47,7 +48,8 @@ def start(extra_args: list[str] | None = None) -> None:
     binary = find_server_binary()
     if binary is None:
         console.print(
-            "llama-server not found. Install with: [bold]brew install llama.cpp[/bold]",
+            "llama-server not found. Install with: "
+            "[bold]brew install llama.cpp[/bold]",
             style="red",
         )
         raise SystemExit(1)
@@ -59,17 +61,12 @@ def start(extra_args: list[str] | None = None) -> None:
         )
         raise SystemExit(1)
 
+    settings = load_settings()
     ensure_config_dir()
     log_fh = open(LOG_FILE, "a")
 
-    cmd = [
-        binary,
-        "--jinja",
-        "--sleep-idle-seconds",
-        str(DEFAULT_IDLE_SECONDS),
-        "--models-preset",
-        str(PRESET_FILE),
-    ]
+    cmd = [binary, "--models-preset", str(PRESET_FILE)]
+    cmd.extend(settings.to_server_args())
     if extra_args:
         cmd.extend(extra_args)
 
@@ -93,7 +90,8 @@ def stop() -> None:
 
     if not is_process_running(pid):
         console.print(
-            f"llama-server [dim](PID {pid})[/dim] is not running. Cleaning up.",
+            f"llama-server [dim](PID {pid})[/dim] is not running. "
+            "Cleaning up.",
             style="yellow",
         )
         remove_pid()

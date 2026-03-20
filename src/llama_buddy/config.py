@@ -15,7 +15,6 @@ PID_FILE = CONFIG_DIR / "server.pid"
 LOG_FILE = CONFIG_DIR / "server.log"
 
 DEFAULT_PORT = 8080
-DEFAULT_IDLE_SECONDS = 300
 
 
 def _default_cache_dir() -> Path:

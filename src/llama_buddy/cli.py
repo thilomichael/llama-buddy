@@ -57,6 +57,9 @@ def build_parser() -> argparse.ArgumentParser:
     # open
     sub.add_parser("open", help="Open the llama-server web UI in the browser")
 
+    # settings
+    sub.add_parser("settings", help="Configure llama-server settings")
+
     return parser
 
 
@@ -103,8 +106,9 @@ def _run(argv: list[str] | None = None) -> None:
 
     elif args.command == "models":
         from llama_buddy.models import list_models
+        from llama_buddy.settings import load_settings
 
-        list_models()
+        list_models(port=load_settings().port)
 
     elif args.command == "download":
         from llama_buddy.download import download
@@ -136,8 +140,14 @@ def _run(argv: list[str] | None = None) -> None:
     elif args.command == "open":
         import webbrowser
 
-        from llama_buddy.config import DEFAULT_PORT
+        from llama_buddy.settings import load_settings
 
-        url = f"http://localhost:{DEFAULT_PORT}"
+        port = load_settings().port
+        url = f"http://localhost:{port}"
         print(f"Opening {url}")
         webbrowser.open(url)
+
+    elif args.command == "settings":
+        from llama_buddy.settings import edit_settings
+
+        edit_settings()
