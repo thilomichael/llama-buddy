@@ -64,13 +64,13 @@ def test_remove():
     args = parser.parse_args(["remove", "mymodel"])
     assert args.command == "remove"
     assert args.model == "mymodel"
-    assert args.delete_files is False
+    assert args.keep_files is False
 
 
-def test_remove_with_delete():
+def test_remove_with_keep():
     parser = build_parser()
-    args = parser.parse_args(["remove", "mymodel", "--delete-files"])
-    assert args.delete_files is True
+    args = parser.parse_args(["remove", "mymodel", "--keep-files"])
+    assert args.keep_files is True
 
 
 def test_info():

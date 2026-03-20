@@ -50,9 +50,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     # remove
     rm_p = sub.add_parser("remove", help="Remove a model")
-    rm_p.add_argument("model", help="Model ID or alias")
+    rm_p.add_argument("model", nargs="?", help="Model ID or alias")
     rm_p.add_argument(
-        "--delete-files", action="store_true", help="Also delete cached .gguf files"
+        "--keep-files", action="store_true", help="Keep cached .gguf files"
     )
 
     # info
@@ -133,7 +133,7 @@ def _run(argv: list[str] | None = None) -> None:
         from llama_buddy.download import remove
         from llama_buddy.server import restart_if_running
 
-        remove(args.model, args.delete_files)
+        remove(args.model or None, args.keep_files)
         restart_if_running()
 
     elif args.command == "info":

@@ -24,6 +24,7 @@ from rich.text import Text
 
 from llama_buddy.config import (
     find_model_gguf_files,
+    find_model_manifests,
     get_cache_dir,
     read_preset,
     resolve_model,
@@ -147,12 +148,15 @@ def _find_partial_downloads() -> list[dict]:
                 if quant.lower() != "latest"
                 else f"{org}/{repo}"
             )
+            # Show the actual quant from the filename for display
+            display_quant = _extract_quant(filename)
             partials.append(
                 {
                     "model_id": model_id,
                     "repo_id": f"{org}/{repo}",
                     "filename": filename,
                     "quant": quant,
+                    "display_name": f"{org}/{repo} ({display_quant})",
                     "size": size,
                     "downloaded": downloaded,
                 }
@@ -187,10 +191,10 @@ def _render_repo_menu(
             is_sel = i == selected
             if is_sel:
                 text.append("  > ", style="bold cyan")
-                text.append(p["model_id"], style="bold cyan")
+                text.append(p["display_name"], style="bold cyan")
                 text.append(f"  ({progress_str})", style="cyan")
             else:
-                text.append(f"    {p['model_id']}", style="yellow")
+                text.append(f"    {p['display_name']}", style="yellow")
                 text.append(f"  ({progress_str})", style="yellow dim")
             text.append("\n")
         text.append("\n")
@@ -716,21 +720,279 @@ def download(model_id: str | None = None, alias: str | None = None) -> None:
         )
 
 
-def remove(model_id_or_alias: str, delete_files: bool = False) -> None:
-    section = resolve_model(model_id_or_alias)
-    if section is None:
+# ---------------------------------------------------------------------------
+# TUI: remove picker
+# ---------------------------------------------------------------------------
+
+
+def _render_remove_menu(
+    complete: list[tuple[str, str, int]],
+    partial: list[dict],
+    selected: int,
+) -> Text:
+    text = Text()
+    text.append("  Select a model to remove\n\n", style="bold")
+
+    idx = 0
+    if complete:
+        text.append("  Models\n", style="bold dim")
+        for section, name, size in complete:
+            is_sel = idx == selected
+            size_str = _human_size(size) if size else ""
+            if is_sel:
+                text.append("  > ", style="bold cyan")
+                text.append(name or section, style="bold cyan")
+                if size_str:
+                    text.append(f"  ({size_str})", style="cyan")
+                if name:
+                    text.append(f"  {section}", style="cyan dim")
+            else:
+                text.append(f"    {name or section}", style="dim")
+                if size_str:
+                    text.append(f"  ({size_str})", style="dim italic")
+                if name:
+                    text.append(f"  {section}", style="dim italic")
+            text.append("\n")
+            idx += 1
+        text.append("\n")
+
+    if partial:
+        text.append("  Incomplete downloads\n", style="bold yellow")
+        for p in partial:
+            is_sel = idx == selected
+            pct = p["downloaded"] / p["size"] * 100 if p["size"] else 0
+            size_str = _human_size(p["size"])
+            progress_str = f"{pct:.0f}% of {size_str}"
+            if is_sel:
+                text.append("  > ", style="bold cyan")
+                text.append(p["display_name"], style="bold cyan")
+                text.append(f"  ({progress_str})", style="cyan")
+            else:
+                text.append(f"    {p['display_name']}", style="yellow")
+                text.append(f"  ({progress_str})", style="yellow dim")
+            text.append("\n")
+            idx += 1
+        text.append("\n")
+
+    if not complete and not partial:
+        text.append("    No models to remove\n", style="dim italic")
+
+    text.append("\n")
+    text.append(
+        "  ↑/↓ navigate  Enter remove  Ctrl-C cancel", style="dim italic"
+    )
+    return text
+
+
+def _pick_remove_interactive() -> str:
+    """Interactive picker for removing a model. Returns model ID."""
+    from llama_buddy.models import compute_model_sizes, get_model_meta
+
+    require_tty()
+
+    with console.status("Loading models…", spinner="dots"):
+        preset = read_preset()
+        sections = [s for s in preset.sections() if s != "*"]
+        sizes = compute_model_sizes()
+        partial = _find_partial_downloads()
+        partial_ids = {p["model_id"] for p in partial}
+
+        # Complete models (in preset, not partial)
+        complete: list[tuple[str, str, int]] = []
+        for section in sections:
+            if section in partial_ids:
+                continue
+            meta = get_model_meta(section)
+            name = meta.get("name", "")
+            base_repo = section.split(":")[0]
+            size = sizes.get(base_repo, 0)
+            complete.append((section, name, size))
+        complete.sort(key=lambda e: (e[1] or e[0]).lower())
+
+    if not complete and not partial:
         console.print(
-            f"Model '{model_id_or_alias}' not found in preset file.",
-            style="red",
+            "No models to remove.", style="yellow"
         )
-        raise SystemExit(1)
+        raise SystemExit(0)
+
+    selected = 0
+    total = len(complete) + len(partial)
+
+    with Live(
+        _render_remove_menu(complete, partial, selected),
+        console=console,
+        auto_refresh=False,
+        transient=True,
+    ) as live:
+        while True:
+            key = read_key()
+            if key == "up" and selected > 0:
+                selected -= 1
+            elif key == "down" and selected < total - 1:
+                selected += 1
+            elif key in ("enter", "right"):
+                if selected < len(complete):
+                    return complete[selected][0]
+                else:
+                    return partial[selected - len(complete)]["model_id"]
+            elif key == "ctrl-c":
+                raise SystemExit(0)
+            else:
+                continue
+
+            live.update(
+                _render_remove_menu(complete, partial, selected),
+                refresh=True,
+            )
+
+
+# ---------------------------------------------------------------------------
+# Remove
+# ---------------------------------------------------------------------------
+
+
+def _remove_model(section: str, keep_files: bool) -> None:
+    """Remove a model: preset entry, manifest, and optionally GGUF files.
+
+    GGUF files are only deleted if no other manifest still references them.
+    """
+    from llama_buddy.config import get_model_groups
 
     preset = read_preset()
-    preset.remove_section(section)
-    write_preset(preset)
-    console.print(f"Removed [bold]{section}[/bold] from preset file.")
+    if preset.has_section(section):
+        preset.remove_section(section)
+        write_preset(preset)
 
-    if delete_files:
+    # Check if other models share the same GGUF files
+    siblings = get_model_groups().get(section, [])
+
+    # Delete manifest(s) for this model only
+    for f in find_model_manifests(section):
+        # Only delete manifests specific to this model's quant
+        quant = section.split(":")[-1] if ":" in section else "latest"
+        if f"={quant}.json" in f.name or f"={quant.lower()}.json" in f.name:
+            f.unlink()
+            console.print(f"Deleted {f.name}", style="dim")
+
+    # Only delete GGUF files if no siblings remain
+    if not keep_files and not siblings:
         for f in find_model_gguf_files(section):
             f.unlink()
-            console.print(f"Deleted {f}", style="dim")
+            etag = f.parent / f"{f.name}.etag"
+            if etag.exists():
+                etag.unlink()
+            console.print(f"Deleted {f.name}", style="dim")
+    elif not keep_files and siblings:
+        console.print(
+            f"Keeping GGUF files (shared with {', '.join(siblings)})",
+            style="dim",
+        )
+
+    console.print(f"Removed [bold]{section}[/bold].", style="green")
+
+
+def _render_confirm(
+    section: str,
+    info_lines: list[tuple[str, str]],
+    selected: int,
+) -> Text:
+    text = Text()
+    text.append("  Remove ", style="bold")
+    text.append(section, style="bold red")
+    text.append("?\n\n")
+
+    for line, style in info_lines:
+        text.append(f"  {line}\n", style=style)
+
+    text.append("\n")
+    options = ["Cancel", "Remove"]
+    for i, label in enumerate(options):
+        if i == selected:
+            text.append("  > ", style="bold cyan")
+            text.append(label, style="bold cyan")
+        else:
+            text.append(f"    {label}", style="dim")
+        text.append("    ")
+
+    text.append("\n\n")
+    text.append("  ←/→ navigate  Enter confirm", style="dim italic")
+    return text
+
+
+def _confirm_remove(section: str, keep_files: bool) -> bool:
+    """Show a confirmation prompt before removing a model.
+
+    Defaults to Cancel. User must navigate to Remove before pressing Enter.
+    Skips confirmation in non-interactive environments.
+    """
+    import sys
+
+    if not sys.stdin.isatty():
+        return True
+
+    from llama_buddy.config import get_model_groups
+
+    files = find_model_gguf_files(section)
+    total_size = sum(f.stat().st_size for f in files)
+    siblings = get_model_groups().get(section, [])
+
+    info_lines: list[tuple[str, str]] = []
+    if siblings:
+        info_lines.append(
+            (f"GGUF files shared with: {', '.join(siblings)}", "dim")
+        )
+        info_lines.append(("Files will be kept on disk", "dim"))
+    elif files and not keep_files:
+        info_lines.append(
+            (
+                f"This will delete {len(files)} file(s)"
+                f" ({_human_size(total_size)})",
+                "dim",
+            )
+        )
+    elif keep_files:
+        info_lines.append(("GGUF files will be kept on disk", "dim"))
+
+    selected = 0  # 0 = Cancel, 1 = Remove
+
+    with Live(
+        _render_confirm(section, info_lines, selected),
+        console=console,
+        auto_refresh=False,
+        transient=True,
+    ) as live:
+        while True:
+            key = read_key()
+            if key in ("left", "right"):
+                selected = 1 - selected
+            elif key == "enter":
+                return selected == 1
+            elif key == "ctrl-c":
+                return False
+            else:
+                continue
+
+            live.update(
+                _render_confirm(section, info_lines, selected),
+                refresh=True,
+            )
+
+
+def remove(
+    model_id_or_alias: str | None = None, keep_files: bool = False
+) -> None:
+    if model_id_or_alias is None:
+        section = _pick_remove_interactive()
+    else:
+        section = resolve_model(model_id_or_alias)
+        if section is None:
+            console.print(
+                f"Model '{model_id_or_alias}' not found in preset file.",
+                style="red",
+            )
+            raise SystemExit(1)
+
+    if not _confirm_remove(section, keep_files):
+        return
+
+    _remove_model(section, keep_files)

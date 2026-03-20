@@ -246,3 +246,16 @@ def find_model_gguf_files(model_id: str) -> list[Path]:
         for f in cache_dir.glob(f"{prefix}*.gguf")
         if "mmproj" not in f.name
     )
+
+
+def find_model_manifests(model_id: str) -> list[Path]:
+    """Find manifest files in cache for a model ID.
+
+    Manifest format: manifest=org=repo=quant.json
+    """
+    cache_dir = get_cache_dir()
+    if not cache_dir.exists():
+        return []
+    base_repo = model_id.split(":")[0]
+    org, repo = base_repo.split("/", 1)
+    return sorted(cache_dir.glob(f"manifest={org}={repo}=*.json"))
