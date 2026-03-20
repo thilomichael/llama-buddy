@@ -111,6 +111,7 @@ llb stop
 | `llb remove [model]` | Remove a model with confirmation dialog. `--keep-files` to preserve GGUFs. |
 | `llb info [model]` | Show GGUF metadata. Interactive selector when no model given. |
 | `llb settings` | Interactive editor for global and per-model settings. |
+| `llb chat [model]` | Interactive chat via `llama-cli`. Model selector when no model given. |
 | `llb open` | Open the `llama-server` web UI in your browser. |
 | `llb logs` | Tail the server log file. |
 

@@ -70,6 +70,10 @@ def build_parser() -> argparse.ArgumentParser:
     # settings
     sub.add_parser("settings", help="Configure llama-server settings")
 
+    # chat
+    chat_p = sub.add_parser("chat", help="Interactive chat with a model")
+    chat_p.add_argument("model", nargs="?", help="Model ID or alias")
+
     return parser
 
 
@@ -169,3 +173,8 @@ def _run(argv: list[str] | None = None) -> None:
 
         edit_settings()
         restart_if_running()
+
+    elif args.command == "chat":
+        from llama_buddy.chat import chat
+
+        chat(args.model or None, remaining or None)
