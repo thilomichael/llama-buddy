@@ -1,22 +1,55 @@
+<div align="center">
+
 # llama-buddy
 
-A CLI wrapper for [llama.cpp](https://github.com/ggml-org/llama.cpp) providing an ollama-like experience.
+**A friendly CLI wrapper for [llama.cpp](https://github.com/ggml-org/llama.cpp)**
+
+Manage, download, and serve local LLMs with a single command.
+Think of it as an ollama-like experience built on top of `llama-server`.
+
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![PyPI](https://img.shields.io/pypi/v/llama-buddy)](https://pypi.org/project/llama-buddy/)
+
+</div>
+
+---
 
 ## Features
 
-- Start/stop/restart `llama-server` as a background daemon
-- Multi-model router mode with automatic load/unload
-- Download models from HuggingFace
-- Rich terminal UI with interactive model selector and search
-- Inspect GGUF metadata and embedded sampling parameters
-- Configurable global and per-model settings via interactive menus
-- Preset-based configuration (`models.ini`) auto-synced with cache
-- Tree-grouped model display showing which models share a GGUF file
+- **Background server** &mdash; start/stop/restart `llama-server` as a daemon
+- **Multi-model routing** &mdash; preset-based configuration with automatic model load/unload
+- **Interactive downloads** &mdash; search HuggingFace, pick a quant, download with progress and resume
+- **Rich terminal UI** &mdash; tables, panels, interactive selectors, and live search
+- **GGUF inspector** &mdash; view model metadata, architecture, and sampling parameters
+- **Per-model settings** &mdash; context size, GPU layers, flash attention, and more
+- **Auto-sync** &mdash; preset file stays in sync with the llama.cpp cache automatically
 
-## Requirements
+## Screenshots
 
-- Python 3.10+
-- [llama.cpp](https://github.com/ggml-org/llama.cpp) installed and on your `PATH`
+<details open>
+<summary><b>Model listing</b> &mdash; <code>llb models</code></summary>
+<br>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/models.svg">
+    <source media="(prefers-color-scheme: light)" srcset="assets/models.svg">
+    <img alt="llb models" src="assets/models.svg" width="700">
+  </picture>
+</p>
+</details>
+
+<details open>
+<summary><b>Model info</b> &mdash; <code>llb info</code></summary>
+<br>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/info.svg">
+    <source media="(prefers-color-scheme: light)" srcset="assets/info.svg">
+    <img alt="llb info" src="assets/info.svg" width="600">
+  </picture>
+</p>
+</details>
 
 ## Installation
 
@@ -24,34 +57,42 @@ A CLI wrapper for [llama.cpp](https://github.com/ggml-org/llama.cpp) providing a
 pip install llama-buddy
 ```
 
-Or install from source with [uv](https://docs.astral.sh/uv/):
+Or with [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uv pip install -e .
+uv pip install llama-buddy
 ```
 
 This installs the `llb` command.
 
+### Prerequisites
+
+- Python 3.10+
+- [llama.cpp](https://github.com/ggml-org/llama.cpp) installed and `llama-server` on your `PATH`
+
 ## Quick start
 
 ```bash
-# Download a model
+# Download a model (interactive search)
+llb download
+
+# Or specify directly
 llb download mistralai/Ministral-3-3B-Instruct-2512-GGUF:Q4_K_M
 
 # Start the server
 llb start
 
-# List models
+# List all models
 llb models
 
-# Open the web UI
-llb open
-
-# View model metadata (interactive selector when no model specified)
+# Inspect model metadata
 llb info
 
-# Configure settings
+# Configure settings (interactive TUI)
 llb settings
+
+# Open the web UI in your browser
+llb open
 
 # Stop the server
 llb stop
@@ -61,45 +102,52 @@ llb stop
 
 | Command | Description |
 |---------|-------------|
-| `llb start [args...]` | Start llama-server in the background. Extra args are forwarded. |
+| `llb start` | Start `llama-server` in the background. Extra args are forwarded. |
 | `llb stop` | Stop the running server. |
-| `llb restart [args...]` | Restart the server. |
+| `llb restart` | Restart the server. |
 | `llb status` | Show whether the server is running. |
-| `llb models` | List all models with status, size, and GGUF grouping. |
-| `llb download <model> [--alias NAME]` | Download a model and add it to the preset file. |
-| `llb remove <model> [--delete-files]` | Remove a model from the preset (optionally delete files). |
-| `llb info [model]` | Show GGUF metadata. Opens interactive selector if no model given. |
-| `llb open` | Open the llama-server web UI in the browser. |
+| `llb models` | List all models with status, size, and grouping. Supports `--sort size`. |
+| `llb download [model]` | Download a model. Interactive HF search when no model given. |
+| `llb remove [model]` | Remove a model with confirmation dialog. `--keep-files` to preserve GGUFs. |
+| `llb info [model]` | Show GGUF metadata. Interactive selector when no model given. |
 | `llb settings` | Interactive editor for global and per-model settings. |
+| `llb open` | Open the `llama-server` web UI in your browser. |
 | `llb logs` | Tail the server log file. |
 
 ## Configuration
 
 Config files live in `~/.config/llama/`:
 
-| File | Description |
-|------|-------------|
-| `models.ini` | llama-server preset file (INI format with HF repo IDs as sections) |
+| File | Purpose |
+|------|---------|
+| `models.ini` | Model preset file &mdash; sections are HF repo IDs, auto-synced with cache |
 | `settings.json` | Global server settings (port, context size, GPU layers, etc.) |
 | `server.pid` | PID of the running server |
 | `server.log` | Server stdout/stderr |
 
-The preset file is automatically kept in sync with models in the llama.cpp cache.
-
 ### Per-model settings
 
-Use `llb settings` → **Model Settings** to configure per-model overrides like context size, GPU layers, flash attention, aliases, or any custom llama-server parameter.
+Run `llb settings` and select **Model Settings** to configure per-model overrides:
+
+- Context size, GPU layers, flash attention
+- Custom aliases
+- Any `llama-server` parameter
 
 ## Development
 
 ```bash
-# Install dev dependencies
+# Clone and install
+git clone https://github.com/thimic/llama-buddy.git
+cd llama-buddy
 uv sync
 
-# Run tests
+# Run
+uv run llb <command>
+
+# Test
 uv run pytest
 
-# Run linter
+# Lint
 uv run ruff check src/ tests/
 ```
 
