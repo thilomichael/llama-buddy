@@ -71,16 +71,29 @@ def is_bare_repo(model_id: str, all_ids: set[str]) -> bool:
     return any(other.startswith(model_id + ":") for other in all_ids)
 
 
-def get_model_name(model_id: str) -> str:
-    """Read the model name from GGUF metadata."""
+def get_model_meta(model_id: str) -> dict[str, str]:
+    """Read model name and context length from GGUF metadata."""
     files = find_model_gguf_files(model_id)
     if not files:
-        return ""
+        return {}
     try:
         meta = read_metadata(files[0])
-        return str(meta.get("general.name", ""))
+        result: dict[str, str] = {}
+        name = meta.get("general.name")
+        if name:
+            result["name"] = str(name)
+        arch = meta.get("general.architecture", "")
+        ctx = meta.get(f"{arch}.context_length")
+        if ctx is not None:
+            result["context_length"] = f"{int(ctx):,}"
+        return result
     except (ValueError, OSError):
-        return ""
+        return {}
+
+
+def get_model_name(model_id: str) -> str:
+    """Read the model name from GGUF metadata."""
+    return get_model_meta(model_id).get("name", "")
 
 
 def list_models(port: int = DEFAULT_PORT) -> None:
@@ -103,6 +116,7 @@ def list_models(port: int = DEFAULT_PORT) -> None:
     table.add_column("Name", style="bold")
     table.add_column("Alias", style="dim")
     table.add_column("Status")
+    table.add_column("Context", justify="right")
     table.add_column("Size", justify="right")
     table.add_column("Model ID", style="dim")
 
@@ -111,7 +125,9 @@ def list_models(port: int = DEFAULT_PORT) -> None:
         if is_bare_repo(model_id, all_ids):
             continue
 
-        name = get_model_name(model_id) or model_id
+        meta = get_model_meta(model_id)
+        name = meta.get("name", model_id)
+        ctx_str = meta.get("context_length", "-")
         aliases = m.get("aliases", [])
         alias = aliases[0] if aliases else ""
 
@@ -122,7 +138,7 @@ def list_models(port: int = DEFAULT_PORT) -> None:
         size = sizes.get(base_repo, 0)
         size_str = format_size(size) if size else "-"
 
-        table.add_row(name, alias, status_str, size_str, model_id)
+        table.add_row(name, alias, status_str, ctx_str, size_str, model_id)
 
     if table.row_count == 0:
         console.print("No models configured.", style="yellow")
