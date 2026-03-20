@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-from rich.console import Console
 from rich.live import Live
 from rich.text import Text
 
 from llama_buddy.config import get_model_groups, read_preset
+from llama_buddy.console import console
 from llama_buddy.models import get_model_name
 from llama_buddy.tui import read_key, require_tty
-
-console = Console()
 
 
 def _render_menu(

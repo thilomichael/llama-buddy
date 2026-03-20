@@ -120,23 +120,63 @@ def resolve_model(name: str) -> str | None:
     return None
 
 
-def _get_manifest_model_ids() -> set[str]:
-    """Return the set of model IDs that have cache manifests."""
+def parse_manifest_stem(stem: str) -> tuple[str, str, str, str] | None:
+    """Parse a manifest filename stem into (model_id, org, repo, quant).
+
+    Stem format: manifest=org=repo=quant
+    Returns None if the stem doesn't match the expected format.
+    """
+    parts = stem.split("=")
+    if len(parts) != 4:
+        return None
+    _, org, repo, quant = parts
+    if quant.lower() == "latest":
+        model_id = f"{org}/{repo}"
+    else:
+        model_id = f"{org}/{repo}:{quant}"
+    return model_id, org, repo, quant
+
+
+def manifest_filename(org: str, repo: str, quant: str) -> str:
+    """Build a manifest filename from components."""
+    return f"manifest={org}={repo}={quant}.json"
+
+
+def _read_manifest_map() -> tuple[dict[str, str], dict[str, list[str]]]:
+    """Parse cache manifests into model-to-GGUF mappings.
+
+    Single source of truth for manifest parsing. Returns (model_to_gguf,
+    gguf_to_models).
+    """
     cache_dir = get_cache_dir()
     if not cache_dir.exists():
-        return set()
+        return {}, {}
 
-    ids: set[str] = set()
+    model_to_gguf: dict[str, str] = {}
     for manifest in cache_dir.glob("manifest=*.json"):
-        parts = manifest.stem.split("=")
-        if len(parts) != 4:
+        parsed = parse_manifest_stem(manifest.stem)
+        if parsed is None:
             continue
-        _, org, repo, quant = parts
-        if quant.lower() == "latest":
-            ids.add(f"{org}/{repo}")
-        else:
-            ids.add(f"{org}/{repo}:{quant}")
-    return ids
+        model_id, _, _, _ = parsed
+        try:
+            data = json.loads(manifest.read_text())
+            gguf = data.get("ggufFile", {}).get("rfilename", "")
+            if gguf:
+                model_to_gguf[model_id] = gguf
+        except (json.JSONDecodeError, OSError):
+            continue
+
+    gguf_to_models: dict[str, list[str]] = {}
+    for mid, gguf in model_to_gguf.items():
+        gguf_to_models.setdefault(gguf, []).append(mid)
+
+    return model_to_gguf, gguf_to_models
+
+
+def _get_manifest_model_ids() -> set[str]:
+    """Return the set of model IDs that have cache manifests."""
+    model_to_gguf, _ = _read_manifest_map()
+    return set(model_to_gguf.keys())
 
 
 def sync_preset_with_cache() -> list[str]:
@@ -177,40 +217,6 @@ def sync_preset_with_cache() -> list[str]:
         write_preset(preset)
 
     return added
-
-
-def _read_manifest_map() -> tuple[dict[str, str], dict[str, list[str]]]:
-    """Parse cache manifests into model↔GGUF mappings.
-
-    Returns (model_to_gguf, gguf_to_models).
-    """
-    cache_dir = get_cache_dir()
-    if not cache_dir.exists():
-        return {}, {}
-
-    model_to_gguf: dict[str, str] = {}
-    for manifest in cache_dir.glob("manifest=*.json"):
-        parts = manifest.stem.split("=")
-        if len(parts) != 4:
-            continue
-        _, org, repo, quant = parts
-        if quant.lower() == "latest":
-            model_id = f"{org}/{repo}"
-        else:
-            model_id = f"{org}/{repo}:{quant}"
-        try:
-            data = json.loads(manifest.read_text())
-            gguf = data.get("ggufFile", {}).get("rfilename", "")
-            if gguf:
-                model_to_gguf[model_id] = gguf
-        except (json.JSONDecodeError, OSError):
-            continue
-
-    gguf_to_models: dict[str, list[str]] = {}
-    for mid, gguf in model_to_gguf.items():
-        gguf_to_models.setdefault(gguf, []).append(mid)
-
-    return model_to_gguf, gguf_to_models
 
 
 def get_model_groups() -> dict[str, list[str]]:

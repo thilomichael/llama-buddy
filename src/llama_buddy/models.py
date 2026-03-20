@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 import httpx
-from rich.console import Console
 from rich.table import Table
 
 from llama_buddy.config import (
@@ -12,9 +13,8 @@ from llama_buddy.config import (
     get_cache_dir,
     get_gguf_model_groups,
 )
+from llama_buddy.console import console
 from llama_buddy.gguf import read_metadata
-
-console = Console()
 
 
 def get_models(port: int = DEFAULT_PORT) -> list[dict]:
@@ -61,12 +61,24 @@ def _extract_repo_key(filename: str) -> str | None:
     return None
 
 
-def format_size(size_bytes: int) -> str:
-    if size_bytes >= 1_073_741_824:
-        return f"{size_bytes / 1_073_741_824:.1f}G"
-    if size_bytes >= 1_048_576:
-        return f"{size_bytes / 1_048_576:.1f}M"
-    return f"{size_bytes / 1024:.1f}K"
+def format_size(size_bytes: int, compact: bool = True) -> str:
+    """Format a byte count as a human-readable string.
+
+    compact=True:  '4.2G'  (used in tables)
+    compact=False: '4.2 GB' (used in download/remove UI)
+    """
+    for threshold, suffix_c, suffix_f in (
+        (1_073_741_824, "G", "GB"),
+        (1_048_576, "M", "MB"),
+        (1_024, "K", "KB"),
+    ):
+        if size_bytes >= threshold:
+            val = size_bytes / threshold
+            suffix = suffix_c if compact else suffix_f
+            sep = "" if compact else " "
+            return f"{val:.1f}{sep}{suffix}"
+    suffix = "B" if compact else " B"
+    return f"{size_bytes}{suffix}"
 
 
 def is_bare_repo(model_id: str, all_ids: set[str]) -> bool:
@@ -76,6 +88,7 @@ def is_bare_repo(model_id: str, all_ids: set[str]) -> bool:
     return any(other.startswith(model_id + ":") for other in all_ids)
 
 
+@lru_cache(maxsize=64)
 def get_model_meta(model_id: str) -> dict[str, str]:
     """Read model name and context length from GGUF metadata."""
     files = find_model_gguf_files(model_id)
@@ -118,31 +131,32 @@ def _group_sort_key(
 
 
 def list_models(port: int = DEFAULT_PORT, sort: str = "name") -> None:
-    try:
-        models = get_models(port)
-    except httpx.HTTPError:
-        console.print(
-            "Could not connect to llama-server. Is it running?", style="red"
-        )
-        raise SystemExit(1)
+    with console.status("Loading models…", spinner="dots"):
+        try:
+            models = get_models(port)
+        except httpx.HTTPError:
+            console.print(
+                "Could not connect to llama-server. Is it running?", style="red"
+            )
+            raise SystemExit(1)
 
-    if not models:
-        console.print("No models configured.", style="yellow")
-        return
+        if not models:
+            console.print("No models configured.", style="yellow")
+            return
 
-    # Filter internal sections
-    models = [m for m in models if m["id"] != "DEFAULT"]
+        # Filter internal sections
+        models = [m for m in models if m["id"] != "DEFAULT"]
 
-    sizes = compute_model_sizes()
-    gguf_groups = get_gguf_model_groups()
-    model_map = {m["id"]: m for m in models}
+        sizes = compute_model_sizes()
+        gguf_groups = get_gguf_model_groups()
+        model_map = {m["id"]: m for m in models}
 
-    # Pre-fetch metadata for sorting
-    meta_cache: dict[str, dict[str, str]] = {}
-    for group in gguf_groups:
-        for mid in group:
-            if mid in model_map:
-                meta_cache[mid] = get_model_meta(mid)
+        # Pre-fetch metadata for sorting
+        meta_cache: dict[str, dict[str, str]] = {}
+        for group in gguf_groups:
+            for mid in group:
+                if mid in model_map:
+                    meta_cache[mid] = get_model_meta(mid)
 
     # Build ordered list: group models that share a GGUF, keep ungrouped ones
     grouped_ids: set[str] = set()

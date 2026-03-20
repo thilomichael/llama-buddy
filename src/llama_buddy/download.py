@@ -10,7 +10,6 @@ import webbrowser
 from pathlib import Path
 
 import httpx
-from rich.console import Console
 from rich.live import Live
 from rich.progress import (
     BarColumn,
@@ -26,13 +25,15 @@ from llama_buddy.config import (
     find_model_gguf_files,
     find_model_manifests,
     get_cache_dir,
+    manifest_filename,
+    parse_manifest_stem,
     read_preset,
     resolve_model,
     write_preset,
 )
+from llama_buddy.console import console
+from llama_buddy.models import format_size
 from llama_buddy.tui import read_key, read_key_timeout, require_tty
-
-console = Console()
 
 HF_API = "https://huggingface.co/api/models"
 
@@ -46,11 +47,7 @@ def _compact_number(n: int) -> str:
 
 
 def _human_size(size: int) -> str:
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if size < 1024:
-            return f"{size:.1f} {unit}"
-        size /= 1024
-    return f"{size:.1f} PB"
+    return format_size(size, compact=False)
 
 
 def _file_size(entry: dict) -> int:
@@ -124,10 +121,10 @@ def _find_partial_downloads() -> list[dict]:
 
     partials: list[dict] = []
     for manifest_path in sorted(cache_dir.glob("manifest=*.json")):
-        parts = manifest_path.stem.split("=")
-        if len(parts) != 4:
+        parsed = parse_manifest_stem(manifest_path.stem)
+        if parsed is None:
             continue
-        _, org, repo, quant = parts
+        model_id, org, repo, quant = parsed
         try:
             data = json.loads(manifest_path.read_text())
             gguf_info = data.get("ggufFile", {})
@@ -143,12 +140,6 @@ def _find_partial_downloads() -> list[dict]:
         downloaded = dest.stat().st_size if dest.exists() else 0
 
         if downloaded < size:
-            model_id = (
-                f"{org}/{repo}:{quant}"
-                if quant.lower() != "latest"
-                else f"{org}/{repo}"
-            )
-            # Show the actual quant from the filename for display
             display_quant = _extract_quant(filename)
             partials.append(
                 {
@@ -577,7 +568,7 @@ def _create_manifest(
     size: int,
 ) -> None:
     """Create a manifest JSON so llama-server recognises the cached model."""
-    manifest_name = f"manifest={org}={repo}={quant}.json"
+    manifest_name = manifest_filename(org, repo, quant)
     manifest = {
         "ggufFile": {
             "rfilename": filename,

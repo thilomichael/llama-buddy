@@ -3,16 +3,15 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, fields
 
-from rich.console import Console
 from rich.live import Live
 from rich.text import Text
 
 from llama_buddy.config import CONFIG_DIR, ensure_config_dir, read_preset, write_preset
+from llama_buddy.console import console
 from llama_buddy.tui import read_key, require_tty
-
-console = Console()
 
 SETTINGS_FILE = CONFIG_DIR / "settings.json"
 
@@ -206,11 +205,11 @@ def _render_kv_menu(
 def _run_kv_editor(
     title: str,
     meta_map: dict[str, dict],
-    get_value: callable,
-    set_value: callable,
-    on_save: callable,
+    get_value: Callable[[str], str],
+    set_value: Callable[[str, str], None],
+    on_save: Callable[[], None],
     extra_items: list[str] | None = None,
-    on_extra: callable | None = None,
+    on_extra: Callable[[int], None] | None = None,
 ) -> None:
     """Generic interactive key-value editor loop.
 

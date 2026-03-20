@@ -112,11 +112,12 @@ def test_sync_preset_with_cache(tmp_path, monkeypatch):
     write_preset(config)
 
     # Create manifests: one matching existing, two new
-    (cache_dir / "manifest=org=model-GGUF=Q4_K_M.json").write_text("{}")
-    (cache_dir / "manifest=org=model-GGUF=latest.json").write_text("{}")
-    (cache_dir / "manifest=other=newmodel-GGUF=Q8_0.json").write_text("{}")
+    manifest_json = '{"ggufFile": {"rfilename": "model.gguf", "size": 100}}'
+    (cache_dir / "manifest=org=model-GGUF=Q4_K_M.json").write_text(manifest_json)
+    (cache_dir / "manifest=org=model-GGUF=latest.json").write_text(manifest_json)
+    (cache_dir / "manifest=other=newmodel-GGUF=Q8_0.json").write_text(manifest_json)
     # Old-format manifest (underscore) should be ignored
-    (cache_dir / "manifest=org_oldmodel-GGUF=latest.json").write_text("{}")
+    (cache_dir / "manifest=org_oldmodel-GGUF=latest.json").write_text(manifest_json)
 
     added = sync_preset_with_cache()
 
@@ -138,7 +139,8 @@ def test_sync_preset_no_duplicates(tmp_path, monkeypatch):
     monkeypatch.setattr("llama_buddy.config.CONFIG_DIR", tmp_path)
     monkeypatch.setattr("llama_buddy.config.get_cache_dir", lambda: cache_dir)
 
-    (cache_dir / "manifest=org=model-GGUF=Q4_K_M.json").write_text("{}")
+    manifest_json = '{"ggufFile": {"rfilename": "model.gguf", "size": 100}}'
+    (cache_dir / "manifest=org=model-GGUF=Q4_K_M.json").write_text(manifest_json)
 
     # First sync adds it
     added1 = sync_preset_with_cache()

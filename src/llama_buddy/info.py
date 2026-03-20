@@ -4,15 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
 from llama_buddy.config import find_model_gguf_files, resolve_model
+from llama_buddy.console import console
 from llama_buddy.gguf import read_metadata
 from llama_buddy.models import format_size
-
-console = Console()
 
 SAMPLING_DEFAULTS = {
     "temperature": 0.8,

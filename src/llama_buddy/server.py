@@ -8,8 +8,6 @@ import signal
 import subprocess
 import time
 
-from rich.console import Console
-
 from llama_buddy.config import (
     LOG_FILE,
     PRESET_FILE,
@@ -18,8 +16,7 @@ from llama_buddy.config import (
     remove_pid,
     write_pid,
 )
-
-console = Console()
+from llama_buddy.console import console
 
 
 def is_process_running(pid: int) -> bool:
@@ -76,6 +73,7 @@ def start(extra_args: list[str] | None = None) -> None:
         stderr=subprocess.STDOUT,
         start_new_session=True,
     )
+    log_fh.close()
     write_pid(proc.pid)
     console.print(
         f"llama-server started [dim](PID {proc.pid})[/dim].", style="green"
