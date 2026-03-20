@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import httpx
 
-from llama_buddy.config import DEFAULT_PORT, get_cache_dir
+from llama_buddy.config import DEFAULT_PORT, find_model_gguf_files, get_cache_dir
+from llama_buddy.gguf import read_metadata
 
 
 def get_models(port: int = DEFAULT_PORT) -> list[dict]:
@@ -72,6 +73,18 @@ def is_bare_repo(model_id: str, all_ids: set[str]) -> bool:
     return any(other.startswith(model_id + ":") for other in all_ids)
 
 
+def get_model_name(model_id: str) -> str:
+    """Read the model name from GGUF metadata."""
+    files = find_model_gguf_files(model_id)
+    if not files:
+        return ""
+    try:
+        meta = read_metadata(files[0])
+        return str(meta.get("general.name", ""))
+    except (ValueError, OSError):
+        return ""
+
+
 def list_models(port: int = DEFAULT_PORT) -> None:
     try:
         models = get_models(port)
@@ -86,35 +99,40 @@ def list_models(port: int = DEFAULT_PORT) -> None:
     sizes = compute_model_sizes()
     all_ids = {m["id"] for m in models}
 
-    rows: list[tuple[str, str, str, str]] = []
+    rows: list[tuple[str, str, str, str, str]] = []
     for m in models:
         model_id = m["id"]
         if is_bare_repo(model_id, all_ids):
             continue
 
+        name = get_model_name(model_id)
         aliases = m.get("aliases", [])
         alias = aliases[0] if aliases else ""
-        status_str = "loaded" if m.get("active_slot_count", 0) > 0 else "unloaded"
+        status_str = (
+            "loaded" if m.get("active_slot_count", 0) > 0 else "unloaded"
+        )
 
-        # Match size: try full ID first, then base repo
         base_repo = model_id.split(":")[0]
         size = sizes.get(base_repo, 0)
         size_str = format_size(size) if size else "-"
 
-        rows.append((model_id, alias, status_str, size_str))
+        rows.append((name, alias, status_str, size_str, model_id))
 
     if not rows:
         print("No models configured.")
         return
 
-    # Print table
-    headers = ("MODEL", "ALIAS", "STATUS", "SIZE")
+    headers = ("NAME", "ALIAS", "STATUS", "SIZE", "MODEL ID")
     col_widths = [
         max(len(headers[i]), max(len(r[i]) for r in rows))
-        for i in range(4)
+        for i in range(len(headers))
     ]
-    header_line = "  ".join(h.ljust(w) for h, w in zip(headers, col_widths))
+    header_line = "  ".join(
+        h.ljust(w) for h, w in zip(headers, col_widths)
+    )
     print(header_line)
     print("-" * len(header_line))
     for row in rows:
-        print("  ".join(val.ljust(w) for val, w in zip(row, col_widths)))
+        print("  ".join(
+            val.ljust(w) for val, w in zip(row, col_widths)
+        ))

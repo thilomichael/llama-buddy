@@ -2,21 +2,46 @@
 
 from __future__ import annotations
 
-from llama_buddy.download import auto_alias
+from llama_buddy.config import read_preset, write_preset
+from llama_buddy.download import remove
 
 
-def test_auto_alias_full():
-    result = auto_alias("mistralai/Ministral-3-3B-Instruct-2512-GGUF:Q4_K_M")
-    assert result == "ministral-3-3b-instruct-2512"
+def test_remove_by_alias(tmp_path, monkeypatch):
+    preset_file = tmp_path / "models.ini"
+    monkeypatch.setattr("llama_buddy.config.PRESET_FILE", preset_file)
+    monkeypatch.setattr("llama_buddy.config.CONFIG_DIR", tmp_path)
+
+    config = read_preset()
+    config.add_section("org/model-GGUF:Q4_K_M")
+    config.set("org/model-GGUF:Q4_K_M", "alias", "mymodel")
+    write_preset(config)
+
+    remove("mymodel")
+
+    config2 = read_preset()
+    assert "org/model-GGUF:Q4_K_M" not in config2.sections()
 
 
-def test_auto_alias_no_quant():
-    assert auto_alias("unsloth/gpt-oss-20b-GGUF") == "gpt-oss-20b"
+def test_remove_by_id(tmp_path, monkeypatch):
+    preset_file = tmp_path / "models.ini"
+    monkeypatch.setattr("llama_buddy.config.PRESET_FILE", preset_file)
+    monkeypatch.setattr("llama_buddy.config.CONFIG_DIR", tmp_path)
+
+    config = read_preset()
+    config.add_section("org/model-GGUF:Q4_K_M")
+    write_preset(config)
+
+    remove("org/model-GGUF:Q4_K_M")
+
+    config2 = read_preset()
+    assert "org/model-GGUF:Q4_K_M" not in config2.sections()
 
 
-def test_auto_alias_strips_it():
-    assert auto_alias("org/Model-7B-it-GGUF:Q5_K_M") == "model-7b"
+def test_remove_not_found(tmp_path, monkeypatch):
+    preset_file = tmp_path / "models.ini"
+    monkeypatch.setattr("llama_buddy.config.PRESET_FILE", preset_file)
 
+    import pytest
 
-def test_auto_alias_strips_instruct():
-    assert auto_alias("org/Model-7B-Instruct-GGUF:Q4_K_M") == "model-7b"
+    with pytest.raises(SystemExit):
+        remove("nonexistent")

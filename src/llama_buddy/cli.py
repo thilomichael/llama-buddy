@@ -24,6 +24,9 @@ def build_parser() -> argparse.ArgumentParser:
     # stop
     sub.add_parser("stop", help="Stop the running llama-server")
 
+    # restart
+    sub.add_parser("restart", help="Restart the llama-server")
+
     # status
     sub.add_parser("status", help="Show server status")
 
@@ -48,6 +51,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     # logs
     sub.add_parser("logs", help="Tail the server log")
+
+    # open
+    sub.add_parser("open", help="Open the llama-server web UI in the browser")
 
     return parser
 
@@ -83,6 +89,11 @@ def _run(argv: list[str] | None = None) -> None:
 
         stop()
 
+    elif args.command == "restart":
+        from llama_buddy.server import restart
+
+        restart(remaining or None)
+
     elif args.command == "status":
         from llama_buddy.server import status
 
@@ -113,3 +124,12 @@ def _run(argv: list[str] | None = None) -> None:
             print(f"Log file not found: {LOG_FILE}")
             raise SystemExit(1)
         subprocess.run(["tail", "-f", str(LOG_FILE)])
+
+    elif args.command == "open":
+        import webbrowser
+
+        from llama_buddy.config import DEFAULT_PORT
+
+        url = f"http://localhost:{DEFAULT_PORT}"
+        print(f"Opening {url}")
+        webbrowser.open(url)

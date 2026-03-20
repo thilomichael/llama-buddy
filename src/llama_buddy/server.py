@@ -93,6 +93,11 @@ def stop() -> None:
     print("llama-server stopped.")
 
 
+def restart(extra_args: list[str] | None = None) -> None:
+    stop()
+    start(extra_args)
+
+
 def status() -> None:
     pid = read_pid()
     if pid is None or not is_process_running(pid):

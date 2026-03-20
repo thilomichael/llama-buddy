@@ -13,21 +13,6 @@ from llama_buddy.config import (
 )
 
 
-def auto_alias(model_id: str) -> str:
-    """Generate a short alias from a model ID like 'org/Model-Name-GGUF:Q4_K_M'."""
-    # Take just the model name, drop org and quant
-    name = model_id.split("/")[-1].split(":")[0]
-    # Strip common suffixes (may appear in any order, repeat until stable)
-    changed = True
-    while changed:
-        changed = False
-        for suffix in ("-GGUF", "-gguf", "-Instruct", "-instruct", "-it"):
-            if name.endswith(suffix):
-                name = name[: -len(suffix)]
-                changed = True
-    return name.lower()
-
-
 def download(model_id: str, alias: str | None = None) -> None:
     preset = read_preset()
 
@@ -37,7 +22,9 @@ def download(model_id: str, alias: str | None = None) -> None:
 
     binary = shutil.which("llama-cli")
     if binary is None:
-        print("Error: llama-cli not found. Install it with: brew install llama.cpp")
+        print(
+            "Error: llama-cli not found. Install it with: brew install llama.cpp"
+        )
         raise SystemExit(1)
 
     print(f"Downloading {model_id}...")
@@ -53,17 +40,20 @@ def download(model_id: str, alias: str | None = None) -> None:
     except subprocess.TimeoutExpired:
         proc.kill()
 
-    if alias is None:
-        alias = auto_alias(model_id)
-
     if not preset.has_section("*"):
         preset.add_section("*")
         preset.set("*", "c", "0")
 
     preset.add_section(model_id)
-    preset.set(model_id, "alias", alias)
+    if alias is not None:
+        preset.set(model_id, "alias", alias)
     write_preset(preset)
-    print(f"Added {model_id} (alias: {alias}) to preset file.")
+
+    msg = f"Added {model_id}"
+    if alias:
+        msg += f" (alias: {alias})"
+    msg += " to preset file."
+    print(msg)
 
 
 def remove(model_id_or_alias: str, delete_files: bool = False) -> None:
