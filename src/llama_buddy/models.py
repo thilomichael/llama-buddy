@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import httpx
+from rich.console import Console
+from rich.table import Table
 
 from llama_buddy.config import DEFAULT_PORT, find_model_gguf_files, get_cache_dir
 from llama_buddy.gguf import read_metadata
+
+console = Console()
 
 
 def get_models(port: int = DEFAULT_PORT) -> list[dict]:
@@ -28,10 +32,6 @@ def compute_model_sizes() -> dict[str, int]:
     for gguf_file in cache_dir.glob("*.gguf"):
         if "mmproj" in gguf_file.name:
             continue
-        # Extract repo prefix: everything before the second underscore
-        # e.g. "unsloth_gpt-oss-20b-GGUF_gpt-oss-20b-Q4_K_M.gguf"
-        #    -> repo_key = "unsloth_gpt-oss-20b-GGUF"
-        #    -> repo_id  = "unsloth/gpt-oss-20b-GGUF"
         repo_key = _extract_repo_key(gguf_file.name)
         if repo_key is None:
             continue
@@ -48,8 +48,6 @@ def _extract_repo_key(filename: str) -> str | None:
     where repo itself may contain underscores (from quant subfolders).
     We match against known manifest files to find the boundary.
     """
-    # The repo key is org_repoName-GGUF — find the longest prefix
-    # ending with -GGUF (before the next underscore)
     parts = filename.split("_")
     for i in range(2, len(parts) + 1):
         candidate = "_".join(parts[:i])
@@ -89,50 +87,45 @@ def list_models(port: int = DEFAULT_PORT) -> None:
     try:
         models = get_models(port)
     except httpx.HTTPError:
-        print("Error: Could not connect to llama-server. Is it running?")
+        console.print(
+            "Could not connect to llama-server. Is it running?", style="red"
+        )
         raise SystemExit(1)
 
     if not models:
-        print("No models configured.")
+        console.print("No models configured.", style="yellow")
         return
 
     sizes = compute_model_sizes()
     all_ids = {m["id"] for m in models}
 
-    rows: list[tuple[str, str, str, str, str]] = []
+    table = Table(title="Models", border_style="cyan")
+    table.add_column("Name", style="bold")
+    table.add_column("Alias", style="dim")
+    table.add_column("Status")
+    table.add_column("Size", justify="right")
+    table.add_column("Model ID", style="dim")
+
     for m in models:
         model_id = m["id"]
         if is_bare_repo(model_id, all_ids):
             continue
 
-        name = get_model_name(model_id)
+        name = get_model_name(model_id) or model_id
         aliases = m.get("aliases", [])
         alias = aliases[0] if aliases else ""
-        status_str = (
-            "loaded" if m.get("active_slot_count", 0) > 0 else "unloaded"
-        )
+
+        is_loaded = m.get("active_slot_count", 0) > 0
+        status_str = "[green]loaded[/green]" if is_loaded else "[dim]unloaded[/dim]"
 
         base_repo = model_id.split(":")[0]
         size = sizes.get(base_repo, 0)
         size_str = format_size(size) if size else "-"
 
-        rows.append((name, alias, status_str, size_str, model_id))
+        table.add_row(name, alias, status_str, size_str, model_id)
 
-    if not rows:
-        print("No models configured.")
+    if table.row_count == 0:
+        console.print("No models configured.", style="yellow")
         return
 
-    headers = ("NAME", "ALIAS", "STATUS", "SIZE", "MODEL ID")
-    col_widths = [
-        max(len(headers[i]), max(len(r[i]) for r in rows))
-        for i in range(len(headers))
-    ]
-    header_line = "  ".join(
-        h.ljust(w) for h, w in zip(headers, col_widths)
-    )
-    print(header_line)
-    print("-" * len(header_line))
-    for row in rows:
-        print("  ".join(
-            val.ljust(w) for val, w in zip(row, col_widths)
-        ))
+    console.print(table)

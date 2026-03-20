@@ -47,7 +47,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     # info
     info_p = sub.add_parser("info", help="Show GGUF metadata for a model")
-    info_p.add_argument("model", help="Model ID, alias, or path to .gguf file")
+    info_p.add_argument(
+        "model", nargs="?", help="Model ID, alias, or path to .gguf file"
+    )
 
     # logs
     sub.add_parser("logs", help="Tail the server log")
@@ -117,7 +119,13 @@ def _run(argv: list[str] | None = None) -> None:
     elif args.command == "info":
         from llama_buddy.info import show_info
 
-        show_info(args.model)
+        model = args.model
+        if model is None:
+            from llama_buddy.select import select_model
+
+            model = select_model()
+            print()
+        show_info(model)
 
     elif args.command == "logs":
         if not LOG_FILE.exists():

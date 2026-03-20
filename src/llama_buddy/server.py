@@ -8,6 +8,8 @@ import signal
 import subprocess
 import time
 
+from rich.console import Console
+
 from llama_buddy.config import (
     DEFAULT_IDLE_SECONDS,
     LOG_FILE,
@@ -17,6 +19,8 @@ from llama_buddy.config import (
     remove_pid,
     write_pid,
 )
+
+console = Console()
 
 
 def is_process_running(pid: int) -> bool:
@@ -34,17 +38,25 @@ def find_server_binary() -> str | None:
 def start(extra_args: list[str] | None = None) -> None:
     pid = read_pid()
     if pid is not None and is_process_running(pid):
-        print(f"llama-server is already running (PID {pid}).")
+        console.print(
+            f"llama-server is already running [dim](PID {pid})[/dim].",
+            style="yellow",
+        )
         return
 
     binary = find_server_binary()
     if binary is None:
-        print("Error: llama-server not found. Install it with: brew install llama.cpp")
+        console.print(
+            "llama-server not found. Install with: [bold]brew install llama.cpp[/bold]",
+            style="red",
+        )
         raise SystemExit(1)
 
     if not PRESET_FILE.exists():
-        print(f"Error: No preset file found at {PRESET_FILE}")
-        print("Add models first with: llb download <model>")
+        console.print(f"No preset file at {PRESET_FILE}", style="red")
+        console.print(
+            "Add models first with: [bold]llb download <model>[/bold]"
+        )
         raise SystemExit(1)
 
     ensure_config_dir()
@@ -53,8 +65,10 @@ def start(extra_args: list[str] | None = None) -> None:
     cmd = [
         binary,
         "--jinja",
-        "--sleep-idle-seconds", str(DEFAULT_IDLE_SECONDS),
-        "--models-preset", str(PRESET_FILE),
+        "--sleep-idle-seconds",
+        str(DEFAULT_IDLE_SECONDS),
+        "--models-preset",
+        str(PRESET_FILE),
     ]
     if extra_args:
         cmd.extend(extra_args)
@@ -66,22 +80,26 @@ def start(extra_args: list[str] | None = None) -> None:
         start_new_session=True,
     )
     write_pid(proc.pid)
-    print(f"llama-server started (PID {proc.pid}).")
+    console.print(
+        f"llama-server started [dim](PID {proc.pid})[/dim].", style="green"
+    )
 
 
 def stop() -> None:
     pid = read_pid()
     if pid is None:
-        print("llama-server is not running (no PID file).")
+        console.print("llama-server is not running.", style="yellow")
         return
 
     if not is_process_running(pid):
-        print(f"llama-server (PID {pid}) is not running. Cleaning up PID file.")
+        console.print(
+            f"llama-server [dim](PID {pid})[/dim] is not running. Cleaning up.",
+            style="yellow",
+        )
         remove_pid()
         return
 
     os.kill(pid, signal.SIGTERM)
-    # Wait briefly for graceful shutdown
     for _ in range(20):
         if not is_process_running(pid):
             break
@@ -90,7 +108,7 @@ def stop() -> None:
         os.kill(pid, signal.SIGKILL)
 
     remove_pid()
-    print("llama-server stopped.")
+    console.print("llama-server stopped.", style="green")
 
 
 def restart(extra_args: list[str] | None = None) -> None:
@@ -103,7 +121,9 @@ def status() -> None:
     if pid is None or not is_process_running(pid):
         if pid is not None:
             remove_pid()
-        print("llama-server is not running.")
+        console.print("llama-server is [red]not running[/red].")
         return
 
-    print(f"llama-server is running (PID {pid}).")
+    console.print(
+        f"llama-server is [green]running[/green] [dim](PID {pid})[/dim]."
+    )
