@@ -29,7 +29,7 @@ def download(model_id: str, alias: str | None = None) -> None:
     binary = shutil.which("llama-cli")
     if binary is None:
         console.print(
-            "llama-cli not found. Install with: [bold]brew install llama.cpp[/bold]",
+            "llama-cli not found. Please install llama.cpp.",
             style="red",
         )
         raise SystemExit(1)

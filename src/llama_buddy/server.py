@@ -48,8 +48,7 @@ def start(extra_args: list[str] | None = None) -> None:
     binary = find_server_binary()
     if binary is None:
         console.print(
-            "llama-server not found. Install with: "
-            "[bold]brew install llama.cpp[/bold]",
+            "llama-server not found. Please install llama.cpp.",
             style="red",
         )
         raise SystemExit(1)

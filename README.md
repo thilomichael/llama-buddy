@@ -1,21 +1,22 @@
 # llama-buddy
 
-A CLI wrapper for [llama.cpp](https://github.com/ggml-org/llama.cpp) providing an ollama-like experience on macOS.
+A CLI wrapper for [llama.cpp](https://github.com/ggml-org/llama.cpp) providing an ollama-like experience.
 
 ## Features
 
-- Start/stop `llama-server` as a background daemon
+- Start/stop/restart `llama-server` as a background daemon
 - Multi-model router mode with automatic load/unload
-- Download models from HuggingFace with auto-generated aliases
-- List models with status and disk size
+- Download models from HuggingFace
+- Rich terminal UI with interactive model selector and search
 - Inspect GGUF metadata and embedded sampling parameters
-- Simple preset-based configuration (`models.ini`)
+- Configurable global and per-model settings via interactive menus
+- Preset-based configuration (`models.ini`) auto-synced with cache
+- Tree-grouped model display showing which models share a GGUF file
 
 ## Requirements
 
-- macOS
 - Python 3.10+
-- llama.cpp installed via Homebrew: `brew install llama.cpp`
+- [llama.cpp](https://github.com/ggml-org/llama.cpp) installed and on your `PATH`
 
 ## Installation
 
@@ -43,14 +44,14 @@ llb start
 # List models
 llb models
 
-# Check server status
-llb status
+# Open the web UI
+llb open
 
-# View model metadata
-llb info ministral-3b
+# View model metadata (interactive selector when no model specified)
+llb info
 
-# Tail server logs
-llb logs
+# Configure settings
+llb settings
 
 # Stop the server
 llb stop
@@ -62,22 +63,32 @@ llb stop
 |---------|-------------|
 | `llb start [args...]` | Start llama-server in the background. Extra args are forwarded. |
 | `llb stop` | Stop the running server. |
+| `llb restart [args...]` | Restart the server. |
 | `llb status` | Show whether the server is running. |
-| `llb models` | List all configured models with aliases, status, and size. |
+| `llb models` | List all models with status, size, and GGUF grouping. |
 | `llb download <model> [--alias NAME]` | Download a model and add it to the preset file. |
 | `llb remove <model> [--delete-files]` | Remove a model from the preset (optionally delete files). |
-| `llb info <model>` | Show GGUF metadata for a model. |
+| `llb info [model]` | Show GGUF metadata. Opens interactive selector if no model given. |
+| `llb open` | Open the llama-server web UI in the browser. |
+| `llb settings` | Interactive editor for global and per-model settings. |
 | `llb logs` | Tail the server log file. |
 
 ## Configuration
 
 Config files live in `~/.config/llama/`:
 
-- **`models.ini`** -- llama-server preset file (INI format with HF repo IDs as sections)
-- **`server.pid`** -- PID of the running server
-- **`server.log`** -- Server stdout/stderr
+| File | Description |
+|------|-------------|
+| `models.ini` | llama-server preset file (INI format with HF repo IDs as sections) |
+| `settings.json` | Global server settings (port, context size, GPU layers, etc.) |
+| `server.pid` | PID of the running server |
+| `server.log` | Server stdout/stderr |
 
-Models are cached in `~/Library/Caches/llama.cpp` (the llama.cpp default on macOS).
+The preset file is automatically kept in sync with models in the llama.cpp cache.
+
+### Per-model settings
+
+Use `llb settings` → **Model Settings** to configure per-model overrides like context size, GPU layers, flash attention, aliases, or any custom llama-server parameter.
 
 ## Development
 
