@@ -54,16 +54,16 @@ Think of it as an ollama-like experience built on top of `llama-server`.
 ## Installation
 
 ```bash
-pip install llama-buddy
+pipx install llama-buddy
 ```
 
 Or with [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uv pip install llama-buddy
+uv tool install llama-buddy
 ```
 
-This installs the `llb` command.
+This installs the `llb` command into an isolated environment and adds it to your `PATH`.
 
 ### Prerequisites
 
