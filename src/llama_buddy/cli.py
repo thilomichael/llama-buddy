@@ -31,7 +31,13 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("status", help="Show server status")
 
     # models
-    sub.add_parser("models", help="List configured models")
+    models_p = sub.add_parser("models", help="List configured models")
+    models_p.add_argument(
+        "--sort",
+        choices=["name", "size"],
+        default="name",
+        help="Sort models by name (default) or size",
+    )
 
     # download
     dl_p = sub.add_parser("download", help="Download a model")
@@ -114,17 +120,21 @@ def _run(argv: list[str] | None = None) -> None:
         from llama_buddy.models import list_models
         from llama_buddy.settings import load_settings
 
-        list_models(port=load_settings().port)
+        list_models(port=load_settings().port, sort=args.sort)
 
     elif args.command == "download":
         from llama_buddy.download import download
+        from llama_buddy.server import restart_if_running
 
         download(args.model or None, args.alias)
+        restart_if_running()
 
     elif args.command == "remove":
         from llama_buddy.download import remove
+        from llama_buddy.server import restart_if_running
 
         remove(args.model, args.delete_files)
+        restart_if_running()
 
     elif args.command == "info":
         from llama_buddy.info import show_info
@@ -154,6 +164,8 @@ def _run(argv: list[str] | None = None) -> None:
         webbrowser.open(url)
 
     elif args.command == "settings":
+        from llama_buddy.server import restart_if_running
         from llama_buddy.settings import edit_settings
 
         edit_settings()
+        restart_if_running()

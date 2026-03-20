@@ -101,7 +101,23 @@ def get_model_name(model_id: str) -> str:
     return get_model_meta(model_id).get("name", "")
 
 
-def list_models(port: int = DEFAULT_PORT) -> None:
+def _group_sort_key(
+    group: list[str],
+    sizes: dict[str, int],
+    meta_cache: dict[str, dict[str, str]],
+    sort: str,
+) -> tuple:
+    """Sort key for a GGUF group."""
+    first = group[0]
+    if sort == "size":
+        base_repo = first.split(":")[0]
+        return (-sizes.get(base_repo, 0),)
+    # Default: sort by model name (from metadata), then model ID
+    name = meta_cache.get(first, {}).get("name", first).lower()
+    return (name,)
+
+
+def list_models(port: int = DEFAULT_PORT, sort: str = "name") -> None:
     try:
         models = get_models(port)
     except httpx.HTTPError:
@@ -114,9 +130,19 @@ def list_models(port: int = DEFAULT_PORT) -> None:
         console.print("No models configured.", style="yellow")
         return
 
+    # Filter internal sections
+    models = [m for m in models if m["id"] != "DEFAULT"]
+
     sizes = compute_model_sizes()
     gguf_groups = get_gguf_model_groups()
     model_map = {m["id"]: m for m in models}
+
+    # Pre-fetch metadata for sorting
+    meta_cache: dict[str, dict[str, str]] = {}
+    for group in gguf_groups:
+        for mid in group:
+            if mid in model_map:
+                meta_cache[mid] = get_model_meta(mid)
 
     # Build ordered list: group models that share a GGUF, keep ungrouped ones
     grouped_ids: set[str] = set()
@@ -137,7 +163,7 @@ def list_models(port: int = DEFAULT_PORT) -> None:
         m = model_map.get(model_id)
         if m is None:
             return
-        meta = get_model_meta(model_id)
+        meta = meta_cache.get(model_id) or get_model_meta(model_id)
         name = meta.get("name", model_id)
         ctx_str = meta.get("context_length", "-")
         aliases = m.get("aliases", [])
@@ -151,7 +177,11 @@ def list_models(port: int = DEFAULT_PORT) -> None:
         table.add_row(display_name, alias, status_str, ctx_str, size_str, model_id)
 
     # Render grouped models with tree structure, then ungrouped
-    for group in sorted(gguf_groups, key=lambda g: g[0].lower()):
+    sorted_groups = sorted(
+        gguf_groups,
+        key=lambda g: _group_sort_key(g, sizes, meta_cache, sort),
+    )
+    for group in sorted_groups:
         present = [mid for mid in group if mid in model_map]
         if not present:
             continue
@@ -159,7 +189,7 @@ def list_models(port: int = DEFAULT_PORT) -> None:
             add_model_row(present[0])
         else:
             # Group header row
-            meta = get_model_meta(present[0])
+            meta = meta_cache.get(present[0], {})
             shared_name = meta.get("name", present[0].split(":")[0])
             base_repo = present[0].split(":")[0]
             size = sizes.get(base_repo, 0)
@@ -174,11 +204,18 @@ def list_models(port: int = DEFAULT_PORT) -> None:
                 add_model_row(mid, prefix)
 
     # Add any models from the API that weren't in any manifest group
-    for m in models:
-        if m["id"] not in grouped_ids and not any(
-            m["id"] in g for g in gguf_groups
-        ):
-            add_model_row(m["id"])
+    ungrouped = [
+        m for m in models
+        if m["id"] not in grouped_ids
+        and not any(m["id"] in g for g in gguf_groups)
+    ]
+    for m in sorted(
+        ungrouped,
+        key=lambda m: _group_sort_key(
+            [m["id"]], sizes, meta_cache, sort
+        ),
+    ):
+        add_model_row(m["id"])
 
     if table.row_count == 0:
         console.print("No models configured.", style="yellow")

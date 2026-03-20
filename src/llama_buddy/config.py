@@ -120,36 +120,60 @@ def resolve_model(name: str) -> str | None:
     return None
 
 
-def sync_preset_with_cache() -> list[str]:
-    """Add models found in cache manifests that are missing from the preset.
-
-    Returns a list of model IDs that were added.
-    """
+def _get_manifest_model_ids() -> set[str]:
+    """Return the set of model IDs that have cache manifests."""
     cache_dir = get_cache_dir()
     if not cache_dir.exists():
-        return []
+        return set()
 
-    preset = read_preset()
-    sections = {s.lower(): s for s in preset.sections()}
-    added: list[str] = []
-
-    for manifest in sorted(cache_dir.glob("manifest=*.json")):
-        # Format: manifest=org=repo=quant.json (4 parts split by =)
+    ids: set[str] = set()
+    for manifest in cache_dir.glob("manifest=*.json"):
         parts = manifest.stem.split("=")
         if len(parts) != 4:
             continue
         _, org, repo, quant = parts
         if quant.lower() == "latest":
-            model_id = f"{org}/{repo}"
+            ids.add(f"{org}/{repo}")
         else:
-            model_id = f"{org}/{repo}:{quant}"
+            ids.add(f"{org}/{repo}:{quant}")
+    return ids
 
+
+def sync_preset_with_cache() -> list[str]:
+    """Sync the preset file with the cache.
+
+    - Adds models found in cache manifests that are missing from the preset.
+    - Removes orphaned preset entries (no manifest and no GGUF files).
+
+    Returns a list of model IDs that were added.
+    """
+    manifest_ids = _get_manifest_model_ids()
+
+    preset = read_preset()
+    sections = {s.lower(): s for s in preset.sections()}
+    changed = False
+    added: list[str] = []
+
+    # Add missing manifest models to preset
+    for model_id in sorted(manifest_ids):
         if model_id.lower() not in sections:
             preset.add_section(model_id)
             sections[model_id.lower()] = model_id
             added.append(model_id)
+            changed = True
 
-    if added:
+    # Remove orphaned preset entries (no manifest, no GGUF files)
+    for section in list(preset.sections()):
+        if section == "*":
+            continue
+        if section in manifest_ids:
+            continue
+        if find_model_gguf_files(section):
+            continue
+        preset.remove_section(section)
+        changed = True
+
+    if changed:
         write_preset(preset)
 
     return added

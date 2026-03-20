@@ -114,6 +114,19 @@ def restart(extra_args: list[str] | None = None) -> None:
     start(extra_args)
 
 
+def is_running() -> bool:
+    """Check if the llama-server is currently running."""
+    pid = read_pid()
+    return pid is not None and is_process_running(pid)
+
+
+def restart_if_running() -> None:
+    """Restart the server if it is currently running."""
+    if is_running():
+        console.print("Restarting llama-server…", style="dim")
+        restart()
+
+
 def status() -> None:
     pid = read_pid()
     if pid is None or not is_process_running(pid):
