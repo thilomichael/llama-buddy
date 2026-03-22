@@ -164,7 +164,7 @@ def _merge_shards(files: list[dict]) -> list[dict]:
         total_size = sum(_file_size(s) for s in shards)
         merged.append(
             {
-                "path": shards[0]["path"],
+                "path": re.sub(r"-\d{5}-of-\d{5}", "", shards[0]["path"]),
                 "size": total_size,
                 "shard_files": shards,
             }

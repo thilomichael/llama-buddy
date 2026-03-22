@@ -57,7 +57,7 @@ def test_merge_shards_groups_split_files():
     assert len(grouped) == 1
     assert grouped[0]["size"] == 250
     assert len(grouped[0]["shard_files"]) == 3
-    assert grouped[0]["path"] == "Q4_K_M/Model-Q4_K_M-00001-of-00003.gguf"
+    assert grouped[0]["path"] == "Q4_K_M/Model-Q4_K_M.gguf"
 
 
 def test_merge_shards_no_shards():
