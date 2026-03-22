@@ -1,0 +1,236 @@
+<svg class="rich-terminal" viewBox="0 0 1177 1123.6" xmlns="http://www.w3.org/2000/svg">
+    <!-- Generated with Rich https://www.textualize.io -->
+    <style>
+
+    @font-face {
+        font-family: "Fira Code";
+        src: local("FiraCode-Regular"),
+                url("https://cdnjs.cloudflare.com/ajax/libs/firacode/6.2.0/woff2/FiraCode-Regular.woff2") format("woff2"),
+                url("https://cdnjs.cloudflare.com/ajax/libs/firacode/6.2.0/woff/FiraCode-Regular.woff") format("woff");
+        font-style: normal;
+        font-weight: 400;
+    }
+    @font-face {
+        font-family: "Fira Code";
+        src: local("FiraCode-Bold"),
+                url("https://cdnjs.cloudflare.com/ajax/libs/firacode/6.2.0/woff2/FiraCode-Bold.woff2") format("woff2"),
+                url("https://cdnjs.cloudflare.com/ajax/libs/firacode/6.2.0/woff/FiraCode-Bold.woff") format("woff");
+        font-style: bold;
+        font-weight: 700;
+    }
+
+    .terminal-127588537-matrix {
+        font-family: Fira Code, monospace;
+        font-size: 20px;
+        line-height: 24.4px;
+        font-variant-east-asian: full-width;
+    }
+
+    .terminal-127588537-title {
+        font-size: 18px;
+        font-weight: bold;
+        font-family: arial;
+    }
+
+    .terminal-127588537-r1 { fill: #c5c8c6;font-weight: bold }
+.terminal-127588537-r2 { fill: #c5c8c6 }
+.terminal-127588537-r3 { fill: #868887;font-weight: bold }
+.terminal-127588537-r4 { fill: #868887 }
+.terminal-127588537-r5 { fill: #868887;font-style: italic; }
+.terminal-127588537-r6 { fill: #68a0b3;font-weight: bold }
+.terminal-127588537-r7 { fill: #68a0b3 }
+    </style>
+
+    <defs>
+    <clipPath id="terminal-127588537-clip-terminal">
+      <rect x="0" y="0" width="1158.0" height="1072.6" />
+    </clipPath>
+    <clipPath id="terminal-127588537-line-0">
+    <rect x="0" y="1.5" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-1">
+    <rect x="0" y="25.9" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-2">
+    <rect x="0" y="50.3" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-3">
+    <rect x="0" y="74.7" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-4">
+    <rect x="0" y="99.1" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-5">
+    <rect x="0" y="123.5" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-6">
+    <rect x="0" y="147.9" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-7">
+    <rect x="0" y="172.3" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-8">
+    <rect x="0" y="196.7" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-9">
+    <rect x="0" y="221.1" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-10">
+    <rect x="0" y="245.5" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-11">
+    <rect x="0" y="269.9" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-12">
+    <rect x="0" y="294.3" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-13">
+    <rect x="0" y="318.7" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-14">
+    <rect x="0" y="343.1" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-15">
+    <rect x="0" y="367.5" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-16">
+    <rect x="0" y="391.9" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-17">
+    <rect x="0" y="416.3" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-18">
+    <rect x="0" y="440.7" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-19">
+    <rect x="0" y="465.1" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-20">
+    <rect x="0" y="489.5" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-21">
+    <rect x="0" y="513.9" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-22">
+    <rect x="0" y="538.3" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-23">
+    <rect x="0" y="562.7" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-24">
+    <rect x="0" y="587.1" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-25">
+    <rect x="0" y="611.5" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-26">
+    <rect x="0" y="635.9" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-27">
+    <rect x="0" y="660.3" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-28">
+    <rect x="0" y="684.7" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-29">
+    <rect x="0" y="709.1" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-30">
+    <rect x="0" y="733.5" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-31">
+    <rect x="0" y="757.9" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-32">
+    <rect x="0" y="782.3" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-33">
+    <rect x="0" y="806.7" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-34">
+    <rect x="0" y="831.1" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-35">
+    <rect x="0" y="855.5" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-36">
+    <rect x="0" y="879.9" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-37">
+    <rect x="0" y="904.3" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-38">
+    <rect x="0" y="928.7" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-39">
+    <rect x="0" y="953.1" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-40">
+    <rect x="0" y="977.5" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-41">
+    <rect x="0" y="1001.9" width="1159" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-127588537-line-42">
+    <rect x="0" y="1026.3" width="1159" height="24.65"/>
+            </clipPath>
+    </defs>
+
+    <rect fill="#292929" stroke="rgba(255,255,255,0.35)" stroke-width="1" x="1" y="1" width="1175" height="1121.6" rx="8"/><text class="terminal-127588537-title" fill="#c5c8c6" text-anchor="middle" x="587" y="27">llb&#160;download</text>
+            <g transform="translate(26,22)">
+            <circle cx="0" cy="0" r="7" fill="#ff5f57"/>
+            <circle cx="22" cy="0" r="7" fill="#febc2e"/>
+            <circle cx="44" cy="0" r="7" fill="#28c840"/>
+            </g>
+        
+    <g transform="translate(9, 41)" clip-path="url(#terminal-127588537-clip-terminal)">
+    
+    <g class="terminal-127588537-matrix">
+    <text class="terminal-127588537-r1" x="0" y="20" textLength="854" clip-path="url(#terminal-127588537-line-0)">&#160;&#160;Select&#160;quantization&#160;—&#160;unsloth/NVIDIA-Nemotron-3-Super-120B-A12B-GGUF</text><text class="terminal-127588537-r2" x="1159" y="20" textLength="12.2" clip-path="url(#terminal-127588537-line-0)">
+</text><text class="terminal-127588537-r2" x="1159" y="44.4" textLength="12.2" clip-path="url(#terminal-127588537-line-1)">
+</text><text class="terminal-127588537-r3" x="0" y="68.8" textLength="183" clip-path="url(#terminal-127588537-line-2)">&#160;&#160;16-bit&#160;(full)</text><text class="terminal-127588537-r2" x="1159" y="68.8" textLength="12.2" clip-path="url(#terminal-127588537-line-2)">
+</text><text class="terminal-127588537-r4" x="0" y="93.2" textLength="634.4" clip-path="url(#terminal-127588537-line-3)">&#160;&#160;&#160;&#160;BF16/NVIDIA-Nemotron-3-Super-120B-A12B-BF16.gguf</text><text class="terminal-127588537-r5" x="634.4" y="93.2" textLength="256.2" clip-path="url(#terminal-127588537-line-3)">&#160;&#160;(209.5&#160;GB&#160;&#160;5&#160;parts)</text><text class="terminal-127588537-r2" x="1159" y="93.2" textLength="12.2" clip-path="url(#terminal-127588537-line-3)">
+</text><text class="terminal-127588537-r2" x="1159" y="117.6" textLength="12.2" clip-path="url(#terminal-127588537-line-4)">
+</text><text class="terminal-127588537-r3" x="0" y="142" textLength="85.4" clip-path="url(#terminal-127588537-line-5)">&#160;&#160;8-bit</text><text class="terminal-127588537-r2" x="1159" y="142" textLength="12.2" clip-path="url(#terminal-127588537-line-5)">
+</text><text class="terminal-127588537-r4" x="0" y="166.4" textLength="634.4" clip-path="url(#terminal-127588537-line-6)">&#160;&#160;&#160;&#160;Q8_0/NVIDIA-Nemotron-3-Super-120B-A12B-Q8_0.gguf</text><text class="terminal-127588537-r5" x="634.4" y="166.4" textLength="256.2" clip-path="url(#terminal-127588537-line-6)">&#160;&#160;(111.4&#160;GB&#160;&#160;4&#160;parts)</text><text class="terminal-127588537-r2" x="1159" y="166.4" textLength="12.2" clip-path="url(#terminal-127588537-line-6)">
+</text><text class="terminal-127588537-r4" x="0" y="190.8" textLength="780.8" clip-path="url(#terminal-127588537-line-7)">&#160;&#160;&#160;&#160;UD-Q8_K_XL/NVIDIA-Nemotron-3-Super-120B-A12B-UD-Q8_K_XL.gguf</text><text class="terminal-127588537-r5" x="780.8" y="190.8" textLength="256.2" clip-path="url(#terminal-127588537-line-7)">&#160;&#160;(114.9&#160;GB&#160;&#160;4&#160;parts)</text><text class="terminal-127588537-r2" x="1159" y="190.8" textLength="12.2" clip-path="url(#terminal-127588537-line-7)">
+</text><text class="terminal-127588537-r2" x="1159" y="215.2" textLength="12.2" clip-path="url(#terminal-127588537-line-8)">
+</text><text class="terminal-127588537-r3" x="0" y="239.6" textLength="85.4" clip-path="url(#terminal-127588537-line-9)">&#160;&#160;6-bit</text><text class="terminal-127588537-r2" x="1159" y="239.6" textLength="12.2" clip-path="url(#terminal-127588537-line-9)">
+</text><text class="terminal-127588537-r4" x="0" y="264" textLength="707.6" clip-path="url(#terminal-127588537-line-10)">&#160;&#160;&#160;&#160;UD-Q6_K/NVIDIA-Nemotron-3-Super-120B-A12B-UD-Q6_K.gguf</text><text class="terminal-127588537-r5" x="707.6" y="264" textLength="244" clip-path="url(#terminal-127588537-line-10)">&#160;&#160;(99.6&#160;GB&#160;&#160;4&#160;parts)</text><text class="terminal-127588537-r2" x="1159" y="264" textLength="12.2" clip-path="url(#terminal-127588537-line-10)">
+</text><text class="terminal-127588537-r4" x="0" y="288.4" textLength="780.8" clip-path="url(#terminal-127588537-line-11)">&#160;&#160;&#160;&#160;UD-Q6_K_XL/NVIDIA-Nemotron-3-Super-120B-A12B-UD-Q6_K_XL.gguf</text><text class="terminal-127588537-r5" x="780.8" y="288.4" textLength="256.2" clip-path="url(#terminal-127588537-line-11)">&#160;&#160;(102.3&#160;GB&#160;&#160;4&#160;parts)</text><text class="terminal-127588537-r2" x="1159" y="288.4" textLength="12.2" clip-path="url(#terminal-127588537-line-11)">
+</text><text class="terminal-127588537-r2" x="1159" y="312.8" textLength="12.2" clip-path="url(#terminal-127588537-line-12)">
+</text><text class="terminal-127588537-r3" x="0" y="337.2" textLength="85.4" clip-path="url(#terminal-127588537-line-13)">&#160;&#160;5-bit</text><text class="terminal-127588537-r2" x="1159" y="337.2" textLength="12.2" clip-path="url(#terminal-127588537-line-13)">
+</text><text class="terminal-127588537-r4" x="0" y="361.6" textLength="756.4" clip-path="url(#terminal-127588537-line-14)">&#160;&#160;&#160;&#160;UD-Q5_K_M/NVIDIA-Nemotron-3-Super-120B-A12B-UD-Q5_K_M.gguf</text><text class="terminal-127588537-r5" x="756.4" y="361.6" textLength="244" clip-path="url(#terminal-127588537-line-14)">&#160;&#160;(93.1&#160;GB&#160;&#160;4&#160;parts)</text><text class="terminal-127588537-r2" x="1159" y="361.6" textLength="12.2" clip-path="url(#terminal-127588537-line-14)">
+</text><text class="terminal-127588537-r4" x="0" y="386" textLength="756.4" clip-path="url(#terminal-127588537-line-15)">&#160;&#160;&#160;&#160;UD-Q5_K_S/NVIDIA-Nemotron-3-Super-120B-A12B-UD-Q5_K_S.gguf</text><text class="terminal-127588537-r5" x="756.4" y="386" textLength="244" clip-path="url(#terminal-127588537-line-15)">&#160;&#160;(77.9&#160;GB&#160;&#160;3&#160;parts)</text><text class="terminal-127588537-r2" x="1159" y="386" textLength="12.2" clip-path="url(#terminal-127588537-line-15)">
+</text><text class="terminal-127588537-r4" x="0" y="410.4" textLength="780.8" clip-path="url(#terminal-127588537-line-16)">&#160;&#160;&#160;&#160;UD-Q5_K_XL/NVIDIA-Nemotron-3-Super-120B-A12B-UD-Q5_K_XL.gguf</text><text class="terminal-127588537-r5" x="780.8" y="410.4" textLength="244" clip-path="url(#terminal-127588537-line-16)">&#160;&#160;(93.3&#160;GB&#160;&#160;4&#160;parts)</text><text class="terminal-127588537-r2" x="1159" y="410.4" textLength="12.2" clip-path="url(#terminal-127588537-line-16)">
+</text><text class="terminal-127588537-r2" x="1159" y="434.8" textLength="12.2" clip-path="url(#terminal-127588537-line-17)">
+</text><text class="terminal-127588537-r3" x="0" y="459.2" textLength="85.4" clip-path="url(#terminal-127588537-line-18)">&#160;&#160;4-bit</text><text class="terminal-127588537-r2" x="1159" y="459.2" textLength="12.2" clip-path="url(#terminal-127588537-line-18)">
+</text><text class="terminal-127588537-r4" x="0" y="483.6" textLength="756.4" clip-path="url(#terminal-127588537-line-19)">&#160;&#160;&#160;&#160;UD-IQ4_NL/NVIDIA-Nemotron-3-Super-120B-A12B-UD-IQ4_NL.gguf</text><text class="terminal-127588537-r5" x="756.4" y="483.6" textLength="244" clip-path="url(#terminal-127588537-line-19)">&#160;&#160;(56.0&#160;GB&#160;&#160;3&#160;parts)</text><text class="terminal-127588537-r2" x="1159" y="483.6" textLength="12.2" clip-path="url(#terminal-127588537-line-19)">
+</text><text class="terminal-127588537-r4" x="0" y="508" textLength="756.4" clip-path="url(#terminal-127588537-line-20)">&#160;&#160;&#160;&#160;UD-IQ4_XS/NVIDIA-Nemotron-3-Super-120B-A12B-UD-IQ4_XS.gguf</text><text class="terminal-127588537-r5" x="756.4" y="508" textLength="244" clip-path="url(#terminal-127588537-line-20)">&#160;&#160;(56.0&#160;GB&#160;&#160;3&#160;parts)</text><text class="terminal-127588537-r2" x="1159" y="508" textLength="12.2" clip-path="url(#terminal-127588537-line-20)">
+</text><text class="terminal-127588537-r6" x="0" y="532.4" textLength="48.8" clip-path="url(#terminal-127588537-line-21)">&#160;&#160;&gt;&#160;</text><text class="terminal-127588537-r6" x="48.8" y="532.4" textLength="707.6" clip-path="url(#terminal-127588537-line-21)">UD-Q4_K_M/NVIDIA-Nemotron-3-Super-120B-A12B-UD-Q4_K_M.gguf</text><text class="terminal-127588537-r7" x="756.4" y="532.4" textLength="244" clip-path="url(#terminal-127588537-line-21)">&#160;&#160;(71.6&#160;GB&#160;&#160;3&#160;parts)</text><text class="terminal-127588537-r2" x="1159" y="532.4" textLength="12.2" clip-path="url(#terminal-127588537-line-21)">
+</text><text class="terminal-127588537-r4" x="0" y="556.8" textLength="756.4" clip-path="url(#terminal-127588537-line-22)">&#160;&#160;&#160;&#160;UD-Q4_K_S/NVIDIA-Nemotron-3-Super-120B-A12B-UD-Q4_K_S.gguf</text><text class="terminal-127588537-r5" x="756.4" y="556.8" textLength="244" clip-path="url(#terminal-127588537-line-22)">&#160;&#160;(68.5&#160;GB&#160;&#160;3&#160;parts)</text><text class="terminal-127588537-r2" x="1159" y="556.8" textLength="12.2" clip-path="url(#terminal-127588537-line-22)">
+</text><text class="terminal-127588537-r4" x="0" y="581.2" textLength="780.8" clip-path="url(#terminal-127588537-line-23)">&#160;&#160;&#160;&#160;UD-Q4_K_XL/NVIDIA-Nemotron-3-Super-120B-A12B-UD-Q4_K_XL.gguf</text><text class="terminal-127588537-r5" x="780.8" y="581.2" textLength="244" clip-path="url(#terminal-127588537-line-23)">&#160;&#160;(72.6&#160;GB&#160;&#160;3&#160;parts)</text><text class="terminal-127588537-r2" x="1159" y="581.2" textLength="12.2" clip-path="url(#terminal-127588537-line-23)">
+</text><text class="terminal-127588537-r2" x="1159" y="605.6" textLength="12.2" clip-path="url(#terminal-127588537-line-24)">
+</text><text class="terminal-127588537-r3" x="0" y="630" textLength="85.4" clip-path="url(#terminal-127588537-line-25)">&#160;&#160;3-bit</text><text class="terminal-127588537-r2" x="1159" y="630" textLength="12.2" clip-path="url(#terminal-127588537-line-25)">
+</text><text class="terminal-127588537-r4" x="0" y="654.4" textLength="732" clip-path="url(#terminal-127588537-line-26)">&#160;&#160;&#160;&#160;UD-IQ3_S/NVIDIA-Nemotron-3-Super-120B-A12B-UD-IQ3_S.gguf</text><text class="terminal-127588537-r5" x="732" y="654.4" textLength="244" clip-path="url(#terminal-127588537-line-26)">&#160;&#160;(49.1&#160;GB&#160;&#160;3&#160;parts)</text><text class="terminal-127588537-r2" x="1159" y="654.4" textLength="12.2" clip-path="url(#terminal-127588537-line-26)">
+</text><text class="terminal-127588537-r4" x="0" y="678.8" textLength="780.8" clip-path="url(#terminal-127588537-line-27)">&#160;&#160;&#160;&#160;UD-IQ3_XXS/NVIDIA-Nemotron-3-Super-120B-A12B-UD-IQ3_XXS.gguf</text><text class="terminal-127588537-r5" x="780.8" y="678.8" textLength="244" clip-path="url(#terminal-127588537-line-27)">&#160;&#160;(49.1&#160;GB&#160;&#160;3&#160;parts)</text><text class="terminal-127588537-r2" x="1159" y="678.8" textLength="12.2" clip-path="url(#terminal-127588537-line-27)">
+</text><text class="terminal-127588537-r4" x="0" y="703.2" textLength="756.4" clip-path="url(#terminal-127588537-line-28)">&#160;&#160;&#160;&#160;UD-Q3_K_M/NVIDIA-Nemotron-3-Super-120B-A12B-UD-Q3_K_M.gguf</text><text class="terminal-127588537-r5" x="756.4" y="703.2" textLength="244" clip-path="url(#terminal-127588537-line-28)">&#160;&#160;(53.6&#160;GB&#160;&#160;3&#160;parts)</text><text class="terminal-127588537-r2" x="1159" y="703.2" textLength="12.2" clip-path="url(#terminal-127588537-line-28)">
+</text><text class="terminal-127588537-r4" x="0" y="727.6" textLength="756.4" clip-path="url(#terminal-127588537-line-29)">&#160;&#160;&#160;&#160;UD-Q3_K_S/NVIDIA-Nemotron-3-Super-120B-A12B-UD-Q3_K_S.gguf</text><text class="terminal-127588537-r5" x="756.4" y="727.6" textLength="244" clip-path="url(#terminal-127588537-line-29)">&#160;&#160;(53.6&#160;GB&#160;&#160;3&#160;parts)</text><text class="terminal-127588537-r2" x="1159" y="727.6" textLength="12.2" clip-path="url(#terminal-127588537-line-29)">
+</text><text class="terminal-127588537-r4" x="0" y="752" textLength="780.8" clip-path="url(#terminal-127588537-line-30)">&#160;&#160;&#160;&#160;UD-Q3_K_XL/NVIDIA-Nemotron-3-Super-120B-A12B-UD-Q3_K_XL.gguf</text><text class="terminal-127588537-r5" x="780.8" y="752" textLength="244" clip-path="url(#terminal-127588537-line-30)">&#160;&#160;(54.3&#160;GB&#160;&#160;3&#160;parts)</text><text class="terminal-127588537-r2" x="1159" y="752" textLength="12.2" clip-path="url(#terminal-127588537-line-30)">
+</text><text class="terminal-127588537-r2" x="1159" y="776.4" textLength="12.2" clip-path="url(#terminal-127588537-line-31)">
+</text><text class="terminal-127588537-r3" x="0" y="800.8" textLength="85.4" clip-path="url(#terminal-127588537-line-32)">&#160;&#160;2-bit</text><text class="terminal-127588537-r2" x="1159" y="800.8" textLength="12.2" clip-path="url(#terminal-127588537-line-32)">
+</text><text class="terminal-127588537-r4" x="0" y="825.2" textLength="732" clip-path="url(#terminal-127588537-line-33)">&#160;&#160;&#160;&#160;UD-IQ2_M/NVIDIA-Nemotron-3-Super-120B-A12B-UD-IQ2_M.gguf</text><text class="terminal-127588537-r5" x="732" y="825.2" textLength="244" clip-path="url(#terminal-127588537-line-33)">&#160;&#160;(45.7&#160;GB&#160;&#160;3&#160;parts)</text><text class="terminal-127588537-r2" x="1159" y="825.2" textLength="12.2" clip-path="url(#terminal-127588537-line-33)">
+</text><text class="terminal-127588537-r4" x="0" y="849.6" textLength="780.8" clip-path="url(#terminal-127588537-line-34)">&#160;&#160;&#160;&#160;UD-IQ2_XXS/NVIDIA-Nemotron-3-Super-120B-A12B-UD-IQ2_XXS.gguf</text><text class="terminal-127588537-r5" x="780.8" y="849.6" textLength="244" clip-path="url(#terminal-127588537-line-34)">&#160;&#160;(45.7&#160;GB&#160;&#160;3&#160;parts)</text><text class="terminal-127588537-r2" x="1159" y="849.6" textLength="12.2" clip-path="url(#terminal-127588537-line-34)">
+</text><text class="terminal-127588537-r4" x="0" y="874" textLength="780.8" clip-path="url(#terminal-127588537-line-35)">&#160;&#160;&#160;&#160;UD-Q2_K_XL/NVIDIA-Nemotron-3-Super-120B-A12B-UD-Q2_K_XL.gguf</text><text class="terminal-127588537-r5" x="780.8" y="874" textLength="244" clip-path="url(#terminal-127588537-line-35)">&#160;&#160;(47.4&#160;GB&#160;&#160;3&#160;parts)</text><text class="terminal-127588537-r2" x="1159" y="874" textLength="12.2" clip-path="url(#terminal-127588537-line-35)">
+</text><text class="terminal-127588537-r2" x="1159" y="898.4" textLength="12.2" clip-path="url(#terminal-127588537-line-36)">
+</text><text class="terminal-127588537-r3" x="0" y="922.8" textLength="85.4" clip-path="url(#terminal-127588537-line-37)">&#160;&#160;1-bit</text><text class="terminal-127588537-r2" x="1159" y="922.8" textLength="12.2" clip-path="url(#terminal-127588537-line-37)">
+</text><text class="terminal-127588537-r4" x="0" y="947.2" textLength="732" clip-path="url(#terminal-127588537-line-38)">&#160;&#160;&#160;&#160;UD-IQ1_M/NVIDIA-Nemotron-3-Super-120B-A12B-UD-IQ1_M.gguf</text><text class="terminal-127588537-r5" x="732" y="947.2" textLength="244" clip-path="url(#terminal-127588537-line-38)">&#160;&#160;(45.7&#160;GB&#160;&#160;3&#160;parts)</text><text class="terminal-127588537-r2" x="1159" y="947.2" textLength="12.2" clip-path="url(#terminal-127588537-line-38)">
+</text><text class="terminal-127588537-r2" x="1159" y="971.6" textLength="12.2" clip-path="url(#terminal-127588537-line-39)">
+</text><text class="terminal-127588537-r3" x="0" y="996" textLength="85.4" clip-path="url(#terminal-127588537-line-40)">&#160;&#160;Other</text><text class="terminal-127588537-r2" x="1159" y="996" textLength="12.2" clip-path="url(#terminal-127588537-line-40)">
+</text><text class="terminal-127588537-r4" x="0" y="1020.4" textLength="756.4" clip-path="url(#terminal-127588537-line-41)">&#160;&#160;&#160;&#160;MXFP4_MOE/NVIDIA-Nemotron-3-Super-120B-A12B-MXFP4_MOE.gguf</text><text class="terminal-127588537-r5" x="756.4" y="1020.4" textLength="244" clip-path="url(#terminal-127588537-line-41)">&#160;&#160;(71.2&#160;GB&#160;&#160;3&#160;parts)</text><text class="terminal-127588537-r2" x="1159" y="1020.4" textLength="12.2" clip-path="url(#terminal-127588537-line-41)">
+</text><text class="terminal-127588537-r2" x="1159" y="1044.8" textLength="12.2" clip-path="url(#terminal-127588537-line-42)">
+</text><text class="terminal-127588537-r5" x="0" y="1069.2" textLength="683.2" clip-path="url(#terminal-127588537-line-43)">&#160;&#160;↑/↓&#160;navigate&#160;&#160;Enter&#160;select&#160;&#160;Ctrl-O&#160;open&#160;&#160;Ctrl-C&#160;cancel</text><text class="terminal-127588537-r2" x="1159" y="1069.2" textLength="12.2" clip-path="url(#terminal-127588537-line-43)">
+</text>
+    </g>
+    </g>
+</svg>

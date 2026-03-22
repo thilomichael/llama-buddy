@@ -40,6 +40,25 @@ Think of it as an ollama-like experience built on top of `llama-server`.
 </details>
 
 <details open>
+<summary><b>Interactive download</b> &mdash; <code>llb download</code></summary>
+<br>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/download.svg">
+    <source media="(prefers-color-scheme: light)" srcset="assets/download.svg">
+    <img alt="llb download" src="assets/download.svg" width="700">
+  </picture>
+</p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/download-quant.svg">
+    <source media="(prefers-color-scheme: light)" srcset="assets/download-quant.svg">
+    <img alt="llb download quantization" src="assets/download-quant.svg" width="700">
+  </picture>
+</p>
+</details>
+
+<details open>
 <summary><b>Model info</b> &mdash; <code>llb info</code></summary>
 <br>
 <p align="center">
