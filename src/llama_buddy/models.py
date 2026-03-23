@@ -12,6 +12,7 @@ from llama_buddy.config import (
     find_model_gguf_files,
     get_cache_dir,
     get_gguf_model_groups,
+    update_vram_usage,
 )
 from llama_buddy.console import console
 from llama_buddy.gguf import read_metadata
@@ -130,6 +131,13 @@ def _group_sort_key(
     return (name,)
 
 
+def _format_mib(mib: float) -> str:
+    """Format a MiB value as a compact human-readable string (e.g. '47.6G')."""
+    if mib >= 1024:
+        return f"{mib / 1024:.1f}G"
+    return f"{mib:.0f}M"
+
+
 def list_models(port: int = DEFAULT_PORT, sort: str = "name") -> None:
     with console.status("Loading models…", spinner="dots"):
         try:
@@ -148,6 +156,7 @@ def list_models(port: int = DEFAULT_PORT, sort: str = "name") -> None:
         models = [m for m in models if m["id"] != "DEFAULT"]
 
         sizes = compute_model_sizes()
+        vram = update_vram_usage()
         gguf_groups = get_gguf_model_groups()
         model_map = {m["id"]: m for m in models}
 
@@ -171,6 +180,7 @@ def list_models(port: int = DEFAULT_PORT, sort: str = "name") -> None:
     table.add_column("Status")
     table.add_column("Context", justify="right")
     table.add_column("Size", justify="right")
+    table.add_column("VRAM", justify="right")
     table.add_column("Model ID", style="dim")
 
     def add_model_row(model_id: str, prefix: str = "") -> None:
@@ -182,13 +192,20 @@ def list_models(port: int = DEFAULT_PORT, sort: str = "name") -> None:
         ctx_str = meta.get("context_length", "-")
         aliases = m.get("aliases", [])
         alias = aliases[0] if aliases else ""
-        is_loaded = m.get("active_slot_count", 0) > 0
+        model_status = m.get("status", {})
+        status_val = model_status.get("value", "") if isinstance(model_status, dict) else ""
+        is_loaded = status_val == "loaded"
         status_str = "[green]loaded[/green]" if is_loaded else "[dim]unloaded[/dim]"
         base_repo = model_id.split(":")[0]
         size = sizes.get(base_repo, 0)
         size_str = format_size(size) if size else "-"
+        vram_mib = vram.get(model_id, 0.0)
+        vram_str = _format_mib(vram_mib) if vram_mib else "-"
         display_name = f"{prefix}{name}" if prefix else name
-        table.add_row(display_name, alias, status_str, ctx_str, size_str, model_id)
+        table.add_row(
+            display_name, alias, status_str, ctx_str,
+            size_str, vram_str, model_id,
+        )
 
     # Render grouped models with tree structure, then ungrouped
     sorted_groups = sorted(
@@ -210,7 +227,7 @@ def list_models(port: int = DEFAULT_PORT, sort: str = "name") -> None:
             size_str = format_size(size) if size else "-"
             table.add_row(
                 f"[bold]{shared_name}[/bold]",
-                "", "", "", size_str, "",
+                "", "", "", size_str, "", "",
             )
             for i, mid in enumerate(present):
                 is_last = i == len(present) - 1

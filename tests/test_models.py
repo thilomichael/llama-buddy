@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from llama_buddy.models import (
     _extract_repo_key,
+    _format_mib,
     compute_model_sizes,
     format_size,
     is_bare_repo,
@@ -73,3 +74,11 @@ def test_compute_model_sizes_multi_shard(tmp_path, monkeypatch):
 
     sizes = compute_model_sizes()
     assert sizes == {"org/big-model-GGUF": 3000}
+
+
+def test_format_mib_gigabytes():
+    assert _format_mib(2048.0) == "2.0G"
+
+
+def test_format_mib_megabytes():
+    assert _format_mib(512.0) == "512M"

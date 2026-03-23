@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import configparser
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -14,6 +15,7 @@ CONFIG_DIR = Path.home() / ".config" / "llama"
 PRESET_FILE = CONFIG_DIR / "models.ini"
 PID_FILE = CONFIG_DIR / "server.pid"
 LOG_FILE = CONFIG_DIR / "server.log"
+VRAM_FILE = CONFIG_DIR / "vram.json"
 
 DEFAULT_PORT = 8080
 
@@ -265,3 +267,83 @@ def find_model_manifests(model_id: str) -> list[Path]:
     base_repo = model_id.split(":")[0]
     org, repo = base_repo.split("/", 1)
     return sorted(cache_dir.glob(f"manifest={org}={repo}=*.json"))
+
+
+# ---------------------------------------------------------------------------
+# VRAM usage parsing from server.log
+# ---------------------------------------------------------------------------
+
+_RE_SPAWN = re.compile(
+    r"srv\s+load: spawning server instance with name=(\S+) on port (\d+)"
+)
+_RE_BUFFER = re.compile(
+    r"\[(\d+)\].*buffer size\s*=\s*([\d.]+)\s*MiB"
+)
+_RE_SLOTS = re.compile(
+    r"\[(\d+)\].*load_model: initializing slots"
+)
+
+
+def parse_vram_from_log(log_path: Path | None = None) -> dict[str, float]:
+    """Parse server.log and return {model_id: total_MiB} for each loaded model.
+
+    Uses a state machine:
+    1. "spawning server instance with name=MODEL on port PORT" maps PORT→MODEL
+    2. "[PORT] ... buffer size = X MiB" accumulates MiB for that PORT
+    3. "[PORT] ... initializing slots" flushes the accumulated value
+
+    Only the last load per model is kept (handles sleep/wake reloads).
+    """
+    if log_path is None:
+        log_path = LOG_FILE
+    if not log_path.exists():
+        return {}
+
+    port_to_model: dict[str, str] = {}
+    port_accum: dict[str, float] = {}
+    result: dict[str, float] = {}
+
+    for line in log_path.read_text(errors="replace").splitlines():
+        m = _RE_SPAWN.search(line)
+        if m:
+            model_id, port = m.group(1), m.group(2)
+            port_to_model[port] = model_id
+            port_accum[port] = 0.0
+            continue
+
+        m = _RE_BUFFER.search(line)
+        if m:
+            port, mib = m.group(1), float(m.group(2))
+            if port in port_to_model:
+                port_accum[port] = port_accum.get(port, 0.0) + mib
+            continue
+
+        m = _RE_SLOTS.search(line)
+        if m:
+            port = m.group(1)
+            if port in port_to_model and port_accum.get(port, 0.0) > 0:
+                result[port_to_model[port]] = port_accum[port]
+                port_accum[port] = 0.0
+
+    return result
+
+
+def read_vram_usage() -> dict[str, float]:
+    """Read cached VRAM usage from vram.json."""
+    if not VRAM_FILE.exists():
+        return {}
+    try:
+        return json.loads(VRAM_FILE.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def update_vram_usage(log_path: Path | None = None) -> dict[str, float]:
+    """Parse server.log, merge into vram.json, and return the result."""
+    existing = read_vram_usage()
+    parsed = parse_vram_from_log(log_path)
+    existing.update(parsed)
+    if parsed:
+        ensure_config_dir()
+        VRAM_FILE.write_text(json.dumps(existing, indent=2) + "\n")
+    return existing
