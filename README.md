@@ -23,6 +23,7 @@ Think of it as an ollama-like experience built on top of `llama-server`.
 - **Rich terminal UI** &mdash; tables, panels, interactive selectors, and live search
 - **GGUF inspector** &mdash; view model metadata, architecture, and sampling parameters
 - **Per-model settings** &mdash; context size, GPU layers, flash attention, and more
+- **VRAM tracking** &mdash; automatically parses server logs to show memory usage per model
 - **Auto-sync** &mdash; preset file stays in sync with the llama.cpp cache automatically
 
 ## Screenshots
@@ -128,7 +129,7 @@ llb stop
 | `llb stop` | Stop the running server. |
 | `llb restart` | Restart the server. |
 | `llb status` | Show whether the server is running. |
-| `llb models` | List all models with status, size, and grouping. Supports `--sort size`. |
+| `llb models` | List all models with status, size, VRAM usage, and grouping. Supports `--sort size`. |
 | `llb download [model]` | Download a model. Interactive HF search when no model given. |
 | `llb remove [model]` | Remove a model with confirmation dialog. `--keep-files` to preserve GGUFs. |
 | `llb info [model]` | Show GGUF metadata. Interactive selector when no model given. |
@@ -145,6 +146,7 @@ Config files live in `~/.config/llama/`:
 |------|---------|
 | `models.ini` | Model preset file &mdash; sections are HF repo IDs, auto-synced with cache |
 | `settings.json` | Global server settings (port, context size, GPU layers, etc.) |
+| `vram.json` | Cached per-model VRAM usage (parsed from server logs) |
 | `server.pid` | PID of the running server |
 | `server.log` | Server stdout/stderr |
 
