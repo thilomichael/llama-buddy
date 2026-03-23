@@ -328,6 +328,25 @@ def parse_vram_from_log(log_path: Path | None = None) -> dict[str, float]:
     return result
 
 
+def parse_child_ports(log_path: Path | None = None) -> dict[str, int]:
+    """Parse server.log and return {model_id: port} for each child server.
+
+    Only the last spawn per model is kept (handles restarts).
+    """
+    if log_path is None:
+        log_path = LOG_FILE
+    if not log_path.exists():
+        return {}
+
+    result: dict[str, int] = {}
+    for line in log_path.read_text(errors="replace").splitlines():
+        m = _RE_SPAWN.search(line)
+        if m:
+            model_id, port = m.group(1), int(m.group(2))
+            result[model_id] = port
+    return result
+
+
 def read_vram_usage() -> dict[str, float]:
     """Read cached VRAM usage from vram.json."""
     if not VRAM_FILE.exists():

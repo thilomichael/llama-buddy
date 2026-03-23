@@ -822,6 +822,67 @@ def _download_files(
     return first_filename
 
 
+# GGUF general.sampling.* → llama-server INI key mapping
+_SAMPLING_KEY_MAP = {
+    "temperature": "temp",
+    "top_k": "top-k",
+    "top_p": "top-p",
+    "min_p": "min-p",
+    "typical_p": "typical",
+    "repeat_penalty": "repeat-penalty",
+    "repeat_last_n": "repeat-last-n",
+    "presence_penalty": "presence-penalty",
+    "frequency_penalty": "frequency-penalty",
+    "mirostat": "mirostat",
+    "mirostat_tau": "mirostat-tau",
+    "mirostat_eta": "mirostat-eta",
+    "dynatemp_range": "dynatemp-range",
+    "dynatemp_exponent": "dynatemp-exponent",
+    "xtc_probability": "xtc-probability",
+    "xtc_threshold": "xtc-threshold",
+    "top_n_sigma": "top-n-sigma",
+}
+
+
+def _sync_sampling_params(model_id: str, preset) -> None:
+    """Read GGUF sampling metadata and write to preset if not already set."""
+    from llama_buddy.gguf import read_metadata
+
+    gguf_files = find_model_gguf_files(model_id)
+    if not gguf_files:
+        return
+
+    try:
+        meta = read_metadata(gguf_files[0])
+    except (ValueError, OSError):
+        return
+
+    sampling = {
+        k.removeprefix("general.sampling."): v
+        for k, v in meta.items()
+        if k.startswith("general.sampling.")
+    }
+    if not sampling:
+        return
+
+    wrote_any = False
+    for gguf_key, value in sampling.items():
+        ini_key = _SAMPLING_KEY_MAP.get(gguf_key)
+        if ini_key is None:
+            continue
+        # Don't overwrite existing user customizations
+        if preset.has_option(model_id, ini_key):
+            continue
+        preset.set(model_id, ini_key, str(value))
+        wrote_any = True
+
+    if wrote_any:
+        console.print(
+            "Applied recommended sampling params from GGUF metadata.",
+            style="dim",
+        )
+
+
 def download(model_id: str | None = None, alias: str | None = None) -> None:
     """Download a model — interactively or by explicit ID."""
     if model_id is None:
@@ -897,7 +958,8 @@ def download(model_id: str | None = None, alias: str | None = None) -> None:
 
     # Add to preset (if not already there)
     preset = read_preset()
-    if model_id not in preset:
+    is_new = model_id not in preset
+    if is_new:
         if not preset.has_section("*"):
             preset.add_section("*")
             preset.set("*", "c", "0")
@@ -905,8 +967,13 @@ def download(model_id: str | None = None, alias: str | None = None) -> None:
         preset.add_section(model_id)
         if alias is not None:
             preset.set(model_id, "alias", alias)
-        write_preset(preset)
 
+    # Sync GGUF sampling params into preset (only for keys not already set)
+    _sync_sampling_params(model_id, preset)
+
+    write_preset(preset)
+
+    if is_new:
         msg = f"Added [bold]{model_id}[/bold]"
         if alias:
             msg += f" (alias: {alias})"

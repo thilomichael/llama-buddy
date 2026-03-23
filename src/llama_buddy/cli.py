@@ -60,6 +60,10 @@ def build_parser() -> argparse.ArgumentParser:
     info_p.add_argument(
         "model", nargs="?", help="Model ID, alias, or path to .gguf file"
     )
+    info_p.add_argument(
+        "--apply-sampling", action="store_true",
+        help="Write GGUF sampling params into the preset INI",
+    )
 
     # logs
     sub.add_parser("logs", help="Tail the server log")
@@ -69,6 +73,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     # settings
     sub.add_parser("settings", help="Configure llama-server settings")
+
+    # props
+    props_p = sub.add_parser("props", help="Show active server sampling params")
+    props_p.add_argument(
+        "model", nargs="?", help="Model ID or alias"
+    )
 
     # chat
     chat_p = sub.add_parser("chat", help="Interactive chat with a model")
@@ -141,15 +151,23 @@ def _run(argv: list[str] | None = None) -> None:
         restart_if_running()
 
     elif args.command == "info":
-        from llama_buddy.info import show_info
+        if args.apply_sampling:
+            from llama_buddy.info import apply_sampling
+            from llama_buddy.server import restart_if_running
 
-        model = args.model
-        if model is None:
-            from llama_buddy.select import select_model
+            apply_sampling(args.model or None)
+            restart_if_running()
+        else:
+            model = args.model
+            if model is None:
+                from llama_buddy.select import select_model
 
-            model = select_model()
-            print()
-        show_info(model)
+                model = select_model()
+                print()
+
+            from llama_buddy.info import show_info
+
+            show_info(model)
 
     elif args.command == "logs":
         if not LOG_FILE.exists():
@@ -173,6 +191,29 @@ def _run(argv: list[str] | None = None) -> None:
 
         edit_settings()
         restart_if_running()
+
+    elif args.command == "props":
+        from llama_buddy.props import show_props
+
+        model = args.model
+        if model is None:
+            from llama_buddy.props import get_loaded_model_ids
+            from llama_buddy.select import select_model
+            from llama_buddy.settings import load_settings
+
+            loaded = get_loaded_model_ids(load_settings().port)
+            if not loaded:
+                from llama_buddy.console import console
+
+                console.print(
+                    "No models are currently loaded.", style="yellow"
+                )
+                raise SystemExit(1)
+            model = select_model(
+                title="Select a loaded model", allowed_ids=loaded,
+            )
+            print()
+        show_props(model)
 
     elif args.command == "chat":
         from llama_buddy.chat import chat

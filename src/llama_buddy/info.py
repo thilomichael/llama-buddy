@@ -7,7 +7,12 @@ from pathlib import Path
 from rich.panel import Panel
 from rich.table import Table
 
-from llama_buddy.config import find_model_gguf_files, resolve_model
+from llama_buddy.config import (
+    find_model_gguf_files,
+    read_preset,
+    resolve_model,
+    write_preset,
+)
 from llama_buddy.console import console
 from llama_buddy.gguf import read_metadata
 from llama_buddy.models import format_size
@@ -17,7 +22,7 @@ SAMPLING_DEFAULTS = {
     "top_k": 40,
     "top_p": 0.95,
     "min_p": 0.05,
-    "repeat_penalty": 1.1,
+    "repeat_penalty": 1.0,
 }
 
 
@@ -32,6 +37,89 @@ def find_gguf_files(name: str) -> list[Path]:
         return find_model_gguf_files(model_id)
 
     return []
+
+
+def _apply_sampling_for_model(
+    model_id: str, preset, key_map: dict[str, str],
+) -> bool:
+    """Apply GGUF sampling params for a single model into preset.
+
+    Returns True if any keys were written.
+    """
+    gguf_files = find_model_gguf_files(model_id)
+    if not gguf_files:
+        return False
+
+    try:
+        meta = read_metadata(gguf_files[0])
+    except (ValueError, OSError):
+        return False
+
+    sampling = {
+        k.removeprefix("general.sampling."): v
+        for k, v in meta.items()
+        if k.startswith("general.sampling.")
+    }
+    if not sampling:
+        return False
+
+    wrote = []
+    skipped = []
+    for gguf_key, value in sorted(sampling.items()):
+        ini_key = key_map.get(gguf_key)
+        if ini_key is None:
+            continue
+        if preset.has_option(model_id, ini_key):
+            skipped.append(f"{ini_key} = {preset.get(model_id, ini_key)}")
+            continue
+        preset.set(model_id, ini_key, str(value))
+        wrote.append(f"{ini_key} = {value}")
+
+    if wrote or skipped:
+        from llama_buddy.models import get_model_name
+
+        name = get_model_name(model_id) or model_id
+        console.print(f"  [bold]{name}[/bold]")
+        for line in wrote:
+            console.print(f"    Set {line}", style="green")
+        for line in skipped:
+            console.print(f"    Kept {line} [dim](already set)[/dim]")
+
+    return bool(wrote)
+
+
+def apply_sampling(model_id_or_path: str | None = None) -> None:
+    """Write GGUF sampling params into the preset INI.
+
+    If model_id_or_path is None, applies to all models in the preset.
+    """
+    from llama_buddy.download import _SAMPLING_KEY_MAP
+
+    preset = read_preset()
+
+    if model_id_or_path is not None:
+        model_id = resolve_model(model_id_or_path)
+        if model_id is None:
+            console.print(
+                f"Model '{model_id_or_path}' not found in preset file.",
+                style="red",
+            )
+            raise SystemExit(1)
+        model_ids = [model_id]
+    else:
+        model_ids = [s for s in preset.sections() if s != "*"]
+
+    changed = False
+    for mid in model_ids:
+        if _apply_sampling_for_model(mid, preset, _SAMPLING_KEY_MAP):
+            changed = True
+
+    if changed:
+        write_preset(preset)
+    elif model_id_or_path is None:
+        console.print(
+            "No models have GGUF sampling params to apply.", style="yellow"
+        )
 
 
 def show_info(model_id_or_path: str) -> None:

@@ -83,13 +83,19 @@ def _filter_entries(
     ]
 
 
-def select_model(title: str = "Select a model") -> str:
+def select_model(
+    title: str = "Select a model",
+    allowed_ids: set[str] | None = None,
+) -> str:
     """Show an interactive menu to pick a model from the preset file.
 
-    Returns the model ID (preset section name).
+    If *allowed_ids* is given, only models whose section name is in the set
+    are shown.  Returns the model ID (preset section name).
     """
     with console.status("Loading models…", spinner="dots"):
         all_entries = get_model_entries()
+        if allowed_ids is not None:
+            all_entries = [e for e in all_entries if e[0] in allowed_ids]
         groups = get_model_groups()
 
     if not all_entries:
