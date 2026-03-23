@@ -74,6 +74,46 @@ def _stop_watchdog() -> None:
         os.kill(pid, signal.SIGTERM)
 
 
+EFFECTIVE_PRESET_FILE = CONFIG_DIR / "models.effective.ini"
+
+
+def _build_effective_preset(global_ctx: int) -> None:
+    """Write a copy of the preset with per-model context clamped to native max.
+
+    llama-server allocates KV cache based on ctx-size even when the model's
+    native context is smaller, wasting VRAM. This writes clamped ``c`` values
+    into a temporary INI so the user's preset stays untouched.
+    """
+    import io
+
+    from llama_buddy.config import read_preset
+    from llama_buddy.models import get_model_meta
+
+    preset = read_preset()
+
+    if global_ctx > 0:
+        for section in preset.sections():
+            if section in ("DEFAULT", "*"):
+                continue
+            meta = get_model_meta(section)
+            native_str = meta.get("context_length", "")
+            if not native_str:
+                continue
+            native = int(native_str.replace(",", ""))
+            try:
+                model_ctx = int(preset.get(section, "c", fallback="0"))
+            except ValueError:
+                model_ctx = 0
+            effective = model_ctx or global_ctx
+            if effective > native:
+                preset.set(section, "c", str(native))
+
+    buf = io.StringIO()
+    preset.write(buf)
+    ensure_config_dir()
+    EFFECTIVE_PRESET_FILE.write_text(buf.getvalue())
+
+
 def start(extra_args: list[str] | None = None) -> None:
     from llama_buddy.settings import load_settings
 
@@ -102,10 +142,11 @@ def start(extra_args: list[str] | None = None) -> None:
 
     settings = load_settings()
     ensure_config_dir()
+    _build_effective_preset(settings.ctx_size)
 
     log_fh = open(LOG_FILE, "a")
 
-    cmd = [binary, "--models-preset", str(PRESET_FILE)]
+    cmd = [binary, "--models-preset", str(EFFECTIVE_PRESET_FILE)]
     cmd.extend(settings.to_server_args())
     if extra_args:
         cmd.extend(extra_args)
@@ -151,6 +192,7 @@ def stop() -> None:
         os.kill(pid, signal.SIGKILL)
 
     remove_pid()
+    EFFECTIVE_PRESET_FILE.unlink(missing_ok=True)
     console.print("llama-server stopped.", style="green")
 
 

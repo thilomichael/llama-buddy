@@ -138,6 +138,45 @@ def _format_mib(mib: float) -> str:
     return f"{mib:.0f}M"
 
 
+def _format_ctx(n: int) -> str:
+    """Format context length compactly: 131072 -> '128K', 1048576 -> '1M'."""
+    if n >= 1_000_000 and n % 1_000_000 == 0:
+        return f"{n // 1_000_000}M"
+    if n >= 1_048_576 and n % 1_048_576 == 0:
+        return f"{n // 1_048_576}M"
+    if n >= 1_000 and n % 1_000 == 0:
+        return f"{n // 1_000}K"
+    if n >= 1_024 and n % 1_024 == 0:
+        return f"{n // 1_024}K"
+    return f"{n:,}"
+
+
+def _effective_ctx(
+    model_id: str, native_ctx: str, preset, global_ctx: int, pad: int = 0,
+) -> str:
+    """Build context display string: 'effective (native)' or just 'native'."""
+    if not native_ctx or native_ctx == "-":
+        return "-"
+
+    # Per-model override
+    model_ctx = 0
+    if preset.has_section(model_id):
+        try:
+            model_ctx = int(preset.get(model_id, "c", fallback="0"))
+        except ValueError:
+            pass
+
+    effective = model_ctx or global_ctx
+    native_int = int(native_ctx.replace(",", ""))
+    eff_fmt = _format_ctx(effective) if effective > 0 else ""
+    native_fmt = _format_ctx(native_int)
+    if effective > 0 and eff_fmt != native_fmt:
+        eff_str = eff_fmt.rjust(pad)
+        native_paren = f"({native_fmt})".ljust(pad + 2)
+        return f"{eff_str} [dim]{native_paren}[/dim]"
+    return native_fmt
+
+
 def list_models(port: int = DEFAULT_PORT, sort: str = "name") -> None:
     with console.status("Loading models…", spinner="dots"):
         try:
@@ -160,12 +199,35 @@ def list_models(port: int = DEFAULT_PORT, sort: str = "name") -> None:
         gguf_groups = get_gguf_model_groups()
         model_map = {m["id"]: m for m in models}
 
+        from llama_buddy.config import read_preset
+        from llama_buddy.settings import load_settings
+
+        preset = read_preset()
+        global_ctx = load_settings().ctx_size
+
         # Pre-fetch metadata for sorting
         meta_cache: dict[str, dict[str, str]] = {}
         for group in gguf_groups:
             for mid in group:
                 if mid in model_map:
                     meta_cache[mid] = get_model_meta(mid)
+
+        # Compute alignment padding for context column
+        ctx_pad = 0
+        for mid, meta in meta_cache.items():
+            native_str = meta.get("context_length", "")
+            if native_str:
+                native_int = int(native_str.replace(",", ""))
+                ctx_pad = max(ctx_pad, len(_format_ctx(native_int)))
+                model_ctx = 0
+                if preset.has_section(mid):
+                    try:
+                        model_ctx = int(preset.get(mid, "c", fallback="0"))
+                    except ValueError:
+                        pass
+                eff = model_ctx or global_ctx
+                if eff > 0:
+                    ctx_pad = max(ctx_pad, len(_format_ctx(eff)))
 
     # Build ordered list: group models that share a GGUF, keep ungrouped ones
     grouped_ids: set[str] = set()
@@ -189,7 +251,8 @@ def list_models(port: int = DEFAULT_PORT, sort: str = "name") -> None:
             return
         meta = meta_cache.get(model_id) or get_model_meta(model_id)
         name = meta.get("name", model_id)
-        ctx_str = meta.get("context_length", "-")
+        native_ctx = meta.get("context_length", "-")
+        ctx_str = _effective_ctx(model_id, native_ctx, preset, global_ctx, ctx_pad)
         aliases = m.get("aliases", [])
         alias = aliases[0] if aliases else ""
         model_status = m.get("status", {})

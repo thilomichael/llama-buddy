@@ -22,7 +22,7 @@ class Settings:
     idle_timeout: int = 300
     jinja: bool = True
     flash_attention: str = "auto"
-    ctx_size: int = 0
+    ctx_size: int = 8192
     gpu_layers: str = "auto"
 
     def to_server_args(self) -> list[str]:
@@ -66,7 +66,7 @@ SETTING_META: dict[str, dict] = {
     },
     "ctx_size": {
         "label": "Context Size",
-        "description": "Prompt context size (0 = use model default)",
+        "description": "Prompt context size (0 = model default)",
         "type": "int",
     },
     "gpu_layers": {

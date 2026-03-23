@@ -13,7 +13,7 @@ def test_default_settings():
     assert s.idle_timeout == 300
     assert s.jinja is True
     assert s.flash_attention == "auto"
-    assert s.ctx_size == 0
+    assert s.ctx_size == 8192
     assert s.gpu_layers == "auto"
 
 
@@ -62,7 +62,8 @@ def test_to_server_args():
     assert "4096" in args
 
 
-def test_to_server_args_no_ctx_override():
-    s = Settings(ctx_size=0)
+def test_to_server_args_default_ctx():
+    s = Settings()
     args = s.to_server_args()
-    assert "--ctx-size" not in args
+    assert "--ctx-size" in args
+    assert "8192" in args
