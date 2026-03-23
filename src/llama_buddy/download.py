@@ -203,23 +203,54 @@ def _find_partial_downloads() -> list[dict]:
         if not filename or not size:
             continue
 
-        cache_filename = f"{org}_{repo}_{filename.replace('/', '_')}"
-        dest = cache_dir / cache_filename
-        downloaded = dest.stat().st_size if dest.exists() else 0
+        # Detect multi-shard models from filename pattern
+        m = _SHARD_RE.search(filename)
+        if m:
+            total_count = int(m.group(2))
+            prefix = filename[: m.start()]
+            total_downloaded = 0
+            all_complete = True
+            for i in range(1, total_count + 1):
+                sf = f"{prefix}-{i:05d}-of-{total_count:05d}.gguf"
+                cache_fn = f"{org}_{repo}_{sf.replace('/', '_')}"
+                dest = cache_dir / cache_fn
+                dl = dest.stat().st_size if dest.exists() else 0
+                total_downloaded += dl
+                if dl == 0:
+                    all_complete = False
+            if not all_complete:
+                display_quant = _extract_quant(filename)
+                partials.append(
+                    {
+                        "model_id": model_id,
+                        "repo_id": f"{org}/{repo}",
+                        "filename": filename,
+                        "quant": quant,
+                        "display_name": f"{org}/{repo} ({display_quant})",
+                        "size": size,
+                        "downloaded": total_downloaded,
+                        "shard_files": True,
+                    }
+                )
+        else:
+            # Single file
+            cache_filename = f"{org}_{repo}_{filename.replace('/', '_')}"
+            dest = cache_dir / cache_filename
+            downloaded = dest.stat().st_size if dest.exists() else 0
 
-        if downloaded < size:
-            display_quant = _extract_quant(filename)
-            partials.append(
-                {
-                    "model_id": model_id,
-                    "repo_id": f"{org}/{repo}",
-                    "filename": filename,
-                    "quant": quant,
-                    "display_name": f"{org}/{repo} ({display_quant})",
-                    "size": size,
-                    "downloaded": downloaded,
-                }
-            )
+            if downloaded < size:
+                display_quant = _extract_quant(filename)
+                partials.append(
+                    {
+                        "model_id": model_id,
+                        "repo_id": f"{org}/{repo}",
+                        "filename": filename,
+                        "quant": quant,
+                        "display_name": f"{org}/{repo} ({display_quant})",
+                        "size": size,
+                        "downloaded": downloaded,
+                    }
+                )
     return partials
 
 
@@ -585,6 +616,8 @@ def _download_gguf(
     """
     url = f"https://huggingface.co/{repo_id}/resolve/main/{filename}"
     existing = dest.stat().st_size if dest.exists() else 0
+    if existing >= size > 0:
+        return None  # Already complete
     headers: dict[str, str] = {}
     if existing > 0:
         headers["Range"] = f"bytes={existing}-"
@@ -769,10 +802,24 @@ def download(model_id: str | None = None, alias: str | None = None) -> None:
             repo_id = result["repo_id"]
             quant = result["quant"]
             model_id = result["model_id"]
-            chosen = {
-                "path": result["filename"],
-                "size": result["size"],
-            }
+            if "shard_files" in result:
+                # Multi-shard: re-fetch file list from HF for per-shard sizes
+                console.print(
+                    f"Fetching files for [bold]{repo_id}[/bold]…"
+                )
+                files = _get_repo_files(repo_id)
+                # Find the matching merged entry by quant
+                q_lower = quant.lower()
+                matches = [f for f in files if q_lower in f["path"].lower()]
+                chosen = matches[0] if matches else {
+                    "path": result["filename"],
+                    "size": result["size"],
+                }
+            else:
+                chosen = {
+                    "path": result["filename"],
+                    "size": result["size"],
+                }
         else:
             repo_id = result
             console.print(f"\nFetching files for [bold]{repo_id}[/bold]…")
