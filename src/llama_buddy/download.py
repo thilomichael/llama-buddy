@@ -116,8 +116,8 @@ def _get_repo_files(repo_id: str) -> list[dict]:
             ):
                 gguf_files.append(entry)
 
-        # If no GGUF files at root, check subdirectories
-        if not gguf_files and subdirs:
+        # Also check subdirectories (some repos have GGUFs in both)
+        if subdirs:
             for subdir in subdirs:
                 resp = client.get(
                     f"{HF_API}/{repo_id}/tree/main/{subdir}"
@@ -331,20 +331,38 @@ def _render_repo_menu(
 _DEBOUNCE_SECS = 0.3
 
 
-def _pick_repo_interactive() -> str | dict:
+class _RepoPickerResult:
+    """Result from _pick_repo_interactive with state for ← back."""
+
+    __slots__ = ("value", "query", "entries")
+
+    def __init__(
+        self, value: str | dict, query: str, entries: list[dict],
+    ) -> None:
+        self.value = value
+        self.query = query
+        self.entries = entries
+
+
+def _pick_repo_interactive(
+    *,
+    prev_query: str = "",
+    prev_entries: list[dict] | None = None,
+) -> _RepoPickerResult:
     """Interactive search and selection of a HF GGUF repo.
 
-    Returns a repo ID string (from search) or a partial download dict
-    (to resume).  Searches HuggingFace as you type with debouncing.
+    Returns a ``_RepoPickerResult`` whose ``.value`` is a repo ID string
+    or a partial-download dict.  The result also carries the search state
+    so it can be restored when returning from the quant picker via ← back.
     """
     require_tty()
-    query = ""
-    entries: list[dict] = []
+    query = prev_query
+    entries: list[dict] = prev_entries if prev_entries is not None else []
     partials = _find_partial_downloads()
     selected = 0
 
     # Background search state
-    searched_query = ""
+    searched_query = prev_query if prev_entries is not None else ""
     searching = False
     last_type_time = 0.0
     result_lock = threading.Lock()
@@ -417,9 +435,13 @@ def _pick_repo_interactive() -> str | dict:
                 selected += 1
             elif key in ("enter", "right"):
                 if showing_partials:
-                    return partials[selected]
+                    return _RepoPickerResult(
+                        partials[selected], query, entries,
+                    )
                 elif entries and active_len > 0:
-                    return entries[selected]["id"]
+                    return _RepoPickerResult(
+                        entries[selected]["id"], query, entries,
+                    )
             elif key == "ctrl-o":
                 if showing_partials and partials:
                     repo_id = partials[selected]["repo_id"]
@@ -534,14 +556,17 @@ def _render_file_menu(
         text.append("\n")
 
     text.append(
-        "  ↑/↓ navigate  Enter select  Ctrl-O open  Ctrl-C cancel",
+        "  ↑/↓ navigate  Enter select  ← back  Ctrl-O open  Ctrl-C cancel",
         style="dim italic",
     )
     return text
 
 
-def _pick_quant_interactive(repo_id: str, files: list[dict]) -> dict:
-    """Interactive selection of a GGUF file from a repo."""
+def _pick_quant_interactive(repo_id: str, files: list[dict]) -> dict | None:
+    """Interactive selection of a GGUF file from a repo.
+
+    Returns the chosen file dict, or None if the user pressed ← to go back.
+    """
     require_tty()
     grouped = _group_files(files)
     # Flat list in display order for selection indexing
@@ -568,6 +593,8 @@ def _pick_quant_interactive(repo_id: str, files: list[dict]) -> dict:
                 selected += 1
             elif key in ("enter", "right"):
                 return flat[selected]
+            elif key == "left":
+                return None
             elif key == "ctrl-o":
                 webbrowser.open(f"https://huggingface.co/{repo_id}")
             elif key == "ctrl-c":
@@ -712,6 +739,8 @@ def _resolve_download_target(
             chosen = files[0]
         else:
             chosen = _pick_quant_interactive(repo_id, files)
+            if chosen is None:
+                raise SystemExit(0)
         quant = _extract_quant(chosen["path"])
     else:
         q_lower = quant.lower()
@@ -796,33 +825,43 @@ def _download_files(
 def download(model_id: str | None = None, alias: str | None = None) -> None:
     """Download a model — interactively or by explicit ID."""
     if model_id is None:
-        result = _pick_repo_interactive()
-        if isinstance(result, dict):
-            # Resuming a partial download
-            repo_id = result["repo_id"]
-            quant = result["quant"]
-            model_id = result["model_id"]
-            if "shard_files" in result:
-                # Multi-shard: re-fetch file list from HF for per-shard sizes
-                console.print(
-                    f"Fetching files for [bold]{repo_id}[/bold]…"
-                )
-                files = _get_repo_files(repo_id)
-                # Find the matching merged entry by quant
-                q_lower = quant.lower()
-                matches = [f for f in files if q_lower in f["path"].lower()]
-                chosen = matches[0] if matches else {
-                    "path": result["filename"],
-                    "size": result["size"],
-                }
-            else:
-                chosen = {
-                    "path": result["filename"],
-                    "size": result["size"],
-                }
-        else:
+        prev_query = ""
+        prev_entries: list[dict] | None = None
+        while True:
+            picker = _pick_repo_interactive(
+                prev_query=prev_query, prev_entries=prev_entries,
+            )
+            result = picker.value
+            if isinstance(result, dict):
+                # Resuming a partial download
+                repo_id = result["repo_id"]
+                quant = result["quant"]
+                model_id = result["model_id"]
+                if "shard_files" in result:
+                    # Multi-shard: re-fetch file list from HF
+                    console.print(
+                        f"Fetching files for [bold]{repo_id}[/bold]…"
+                    )
+                    files = _get_repo_files(repo_id)
+                    q_lower = quant.lower()
+                    matches = [
+                        f for f in files if q_lower in f["path"].lower()
+                    ]
+                    chosen = matches[0] if matches else {
+                        "path": result["filename"],
+                        "size": result["size"],
+                    }
+                else:
+                    chosen = {
+                        "path": result["filename"],
+                        "size": result["size"],
+                    }
+                break
+
             repo_id = result
-            console.print(f"\nFetching files for [bold]{repo_id}[/bold]…")
+            console.print(
+                f"\nFetching files for [bold]{repo_id}[/bold]…"
+            )
             try:
                 files = _get_repo_files(repo_id)
             except httpx.HTTPError as e:
@@ -838,8 +877,13 @@ def download(model_id: str | None = None, alias: str | None = None) -> None:
                 raise SystemExit(1)
 
             chosen = _pick_quant_interactive(repo_id, files)
+            if chosen is None:
+                prev_query = picker.query
+                prev_entries = picker.entries
+                continue
             quant = _extract_quant(chosen["path"])
             model_id = f"{repo_id}:{quant}"
+            break
     else:
         repo_id, chosen, quant = _resolve_download_target(model_id)
         model_id = f"{repo_id}:{quant}"
