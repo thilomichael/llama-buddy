@@ -22,6 +22,8 @@ Think of it as an ollama-like experience built on top of `llama-server`.
 - **Interactive downloads** &mdash; search HuggingFace, pick a quant, download with progress and resume
 - **Rich terminal UI** &mdash; tables, panels, interactive selectors, and live search
 - **GGUF inspector** &mdash; view model metadata, architecture, and sampling parameters
+- **Server props** &mdash; inspect active sampling parameters on loaded models
+- **Sampling sync** &mdash; automatically applies GGUF-recommended sampling params to your preset
 - **Per-model settings** &mdash; context size, GPU layers, flash attention, and more
 - **Idle model unloading** &mdash; background watchdog automatically unloads models after configurable idle timeout
 - **VRAM tracking** &mdash; automatically parses server logs to show memory usage per model
@@ -112,6 +114,12 @@ llb chat
 # Inspect model metadata
 llb info
 
+# Show active sampling params for a loaded model
+llb props
+
+# Apply GGUF-recommended sampling params to all models
+llb info --apply-sampling
+
 # Configure settings (interactive TUI)
 llb settings
 
@@ -134,6 +142,8 @@ llb stop
 | `llb download [model]` | Download a model. Interactive HF search when no model given. |
 | `llb remove [model]` | Remove a model with confirmation dialog. `--keep-files` to preserve GGUFs. |
 | `llb info [model]` | Show GGUF metadata. Interactive selector when no model given. |
+| `llb info --apply-sampling [model]` | Write GGUF sampling params into the preset. All models when no model given. |
+| `llb props [model]` | Show active server sampling params for a loaded model. |
 | `llb settings` | Interactive editor for global and per-model settings. |
 | `llb chat [model]` | Interactive chat via `llama-cli`. Model selector when no model given. |
 | `llb open` | Open the `llama-server` web UI in your browser. |
