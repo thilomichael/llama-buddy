@@ -23,6 +23,7 @@ Think of it as an ollama-like experience built on top of `llama-server`.
 - **Rich terminal UI** &mdash; tables, panels, interactive selectors, and live search
 - **GGUF inspector** &mdash; view model metadata, architecture, and sampling parameters
 - **Per-model settings** &mdash; context size, GPU layers, flash attention, and more
+- **Idle model unloading** &mdash; background watchdog automatically unloads models after configurable idle timeout
 - **VRAM tracking** &mdash; automatically parses server logs to show memory usage per model
 - **Auto-sync** &mdash; preset file stays in sync with the llama.cpp cache automatically
 

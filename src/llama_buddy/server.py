@@ -6,9 +6,11 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import time
 
 from llama_buddy.config import (
+    CONFIG_DIR,
     LOG_FILE,
     PRESET_FILE,
     ensure_config_dir,
@@ -17,6 +19,8 @@ from llama_buddy.config import (
     write_pid,
 )
 from llama_buddy.console import console
+
+WATCHDOG_PID_FILE = CONFIG_DIR / "watchdog.pid"
 
 
 def is_process_running(pid: int) -> bool:
@@ -29,6 +33,45 @@ def is_process_running(pid: int) -> bool:
 
 def find_server_binary() -> str | None:
     return shutil.which("llama-server")
+
+
+def _start_watchdog(settings) -> None:
+    """Spawn the idle-model watchdog as a background process."""
+    if settings.idle_timeout <= 0:
+        return
+
+    _stop_watchdog()
+
+    poll_interval = max(30, settings.idle_timeout // 10)
+    log_fh = open(LOG_FILE, "a")
+    proc = subprocess.Popen(
+        [
+            sys.executable, "-m", "llama_buddy.watchdog",
+            str(settings.port), str(poll_interval),
+        ],
+        stdout=log_fh,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    log_fh.close()
+    ensure_config_dir()
+    WATCHDOG_PID_FILE.write_text(str(proc.pid))
+
+
+def _stop_watchdog() -> None:
+    """Stop the idle-model watchdog if running."""
+    if not WATCHDOG_PID_FILE.exists():
+        return
+    text = WATCHDOG_PID_FILE.read_text().strip()
+    WATCHDOG_PID_FILE.unlink(missing_ok=True)
+    if not text:
+        return
+    try:
+        pid = int(text)
+    except ValueError:
+        return
+    if is_process_running(pid):
+        os.kill(pid, signal.SIGTERM)
 
 
 def start(extra_args: list[str] | None = None) -> None:
@@ -79,8 +122,12 @@ def start(extra_args: list[str] | None = None) -> None:
         f"llama-server started [dim](PID {proc.pid})[/dim].", style="green"
     )
 
+    _start_watchdog(settings)
+
 
 def stop() -> None:
+    _stop_watchdog()
+
     pid = read_pid()
     if pid is None:
         console.print("llama-server is not running.", style="yellow")
