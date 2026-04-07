@@ -108,6 +108,7 @@ def test_sync_preset_with_cache(tmp_path, monkeypatch):
     monkeypatch.setattr("llama_buddy.config.PRESET_FILE", preset_file)
     monkeypatch.setattr("llama_buddy.config.CONFIG_DIR", tmp_path)
     monkeypatch.setattr("llama_buddy.config.get_cache_dir", lambda: cache_dir)
+    monkeypatch.setattr("llama_buddy.config.get_hf_hub_dir", lambda: tmp_path / "no_hf")
 
     # Create an existing preset with one model
     config = read_preset()
@@ -141,6 +142,7 @@ def test_sync_preset_no_duplicates(tmp_path, monkeypatch):
     monkeypatch.setattr("llama_buddy.config.PRESET_FILE", preset_file)
     monkeypatch.setattr("llama_buddy.config.CONFIG_DIR", tmp_path)
     monkeypatch.setattr("llama_buddy.config.get_cache_dir", lambda: cache_dir)
+    monkeypatch.setattr("llama_buddy.config.get_hf_hub_dir", lambda: tmp_path / "no_hf")
 
     manifest_json = '{"ggufFile": {"rfilename": "model.gguf", "size": 100}}'
     (cache_dir / "manifest=org=model-GGUF=Q4_K_M.json").write_text(manifest_json)

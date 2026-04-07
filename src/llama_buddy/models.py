@@ -12,6 +12,7 @@ from llama_buddy.config import (
     find_model_gguf_files,
     get_cache_dir,
     get_gguf_model_groups,
+    get_hf_hub_dir,
     update_vram_usage,
 )
 from llama_buddy.console import console
@@ -27,28 +28,53 @@ def get_models(port: int = DEFAULT_PORT) -> list[dict]:
 def compute_model_sizes() -> dict[str, int]:
     """Map model repo IDs to total size of their .gguf files in cache.
 
-    Cache files are flat: org_repo-GGUF_filename.gguf
-    The repo prefix (org_repo-GGUF) maps to org/repo-GGUF with _ as separator.
+    Scans both HF hub cache and flat cache.
     """
     sizes: dict[str, int] = {}
-    cache_dir = get_cache_dir()
-    if not cache_dir.exists():
-        return sizes
+    seen: set[str] = set()  # resolved paths to avoid double-counting
 
-    for gguf_file in cache_dir.glob("*.gguf"):
-        if "mmproj" in gguf_file.name:
-            continue
-        repo_key = _extract_repo_key(gguf_file.name)
-        if repo_key is None:
-            continue
-        repo_id = repo_key.replace("_", "/", 1)
-        sizes[repo_id] = sizes.get(repo_id, 0) + gguf_file.stat().st_size
+    # HF hub cache
+    hf_dir = get_hf_hub_dir()
+    if hf_dir.exists():
+        for model_dir in hf_dir.glob("models--*--*-GGUF"):
+            if not model_dir.is_dir():
+                continue
+            parts = model_dir.name.split("--", 2)
+            if len(parts) < 3:
+                continue
+            repo_id = f"{parts[1]}/{parts[2]}"
+            snapshots = model_dir / "snapshots"
+            if not snapshots.exists():
+                continue
+            for f in snapshots.glob("**/*.gguf"):
+                if "mmproj" in f.name:
+                    continue
+                resolved = str(f.resolve())
+                if resolved not in seen:
+                    seen.add(resolved)
+                    sizes[repo_id] = sizes.get(repo_id, 0) + f.stat().st_size
+
+    # Flat cache fallback
+    cache_dir = get_cache_dir()
+    if cache_dir.exists():
+        for gguf_file in cache_dir.glob("*.gguf"):
+            if "mmproj" in gguf_file.name:
+                continue
+            resolved = str(gguf_file.resolve())
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            repo_key = _extract_repo_key(gguf_file.name)
+            if repo_key is None:
+                continue
+            repo_id = repo_key.replace("_", "/", 1)
+            sizes[repo_id] = sizes.get(repo_id, 0) + gguf_file.stat().st_size
 
     return sizes
 
 
 def _extract_repo_key(filename: str) -> str | None:
-    """Extract the 'org_repo' prefix from a cache filename.
+    """Extract the 'org_repo' prefix from a flat-cache filename.
 
     Filenames follow the pattern: org_repo_filename.gguf
     where repo itself may contain underscores (from quant subfolders).
@@ -191,8 +217,13 @@ def list_models(port: int = DEFAULT_PORT, sort: str = "name") -> None:
             console.print("No models configured.", style="yellow")
             return
 
-        # Filter internal sections
-        models = [m for m in models if m["id"] != "DEFAULT"]
+        # Filter internal sections and non-GGUF models (server auto-discovers
+        # all HF hub repos, but only -GGUF ones are loadable)
+        models = [
+            m for m in models
+            if m["id"] != "DEFAULT"
+            and m["id"].split(":")[0].endswith("-GGUF")
+        ]
 
         sizes = compute_model_sizes()
         vram = update_vram_usage()

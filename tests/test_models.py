@@ -54,6 +54,7 @@ def test_extract_repo_key_no_gguf():
 
 def test_compute_model_sizes(tmp_path, monkeypatch):
     monkeypatch.setattr("llama_buddy.models.get_cache_dir", lambda: tmp_path)
+    monkeypatch.setattr("llama_buddy.models.get_hf_hub_dir", lambda: tmp_path / "no_hf")
 
     # Create fake cache files
     f1 = tmp_path / "org_model-GGUF_model-Q4_K_M.gguf"
@@ -67,6 +68,7 @@ def test_compute_model_sizes(tmp_path, monkeypatch):
 
 def test_compute_model_sizes_multi_shard(tmp_path, monkeypatch):
     monkeypatch.setattr("llama_buddy.models.get_cache_dir", lambda: tmp_path)
+    monkeypatch.setattr("llama_buddy.models.get_hf_hub_dir", lambda: tmp_path / "no_hf")
 
     for i in range(1, 4):
         f = tmp_path / f"org_big-model-GGUF_Q4_K_M_shard-{i:05d}.gguf"

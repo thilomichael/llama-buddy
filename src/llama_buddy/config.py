@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import configparser
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -53,6 +54,40 @@ def get_cache_dir() -> Path:
         except (subprocess.TimeoutExpired, OSError):
             pass
     return _default_cache_dir()
+
+
+def get_hf_hub_dir() -> Path:
+    """Return the HuggingFace hub cache directory.
+
+    llama-server 8500+ uses this as the primary model cache.
+    """
+    hf_home = os.environ.get("HF_HOME")
+    if hf_home:
+        return Path(hf_home) / "hub"
+    return Path.home() / ".cache" / "huggingface" / "hub"
+
+
+def hf_model_dir(org: str, repo: str) -> Path:
+    """Return the HF hub directory for a specific model."""
+    return get_hf_hub_dir() / f"models--{org}--{repo}"
+
+
+def _hf_model_dir_for_id(model_id: str) -> Path:
+    """Return the HF hub dir for a model ID (org/repo or org/repo:quant)."""
+    base_repo = model_id.split(":")[0]
+    org, repo = base_repo.split("/", 1)
+    return hf_model_dir(org, repo)
+
+
+_QUANT_RE = re.compile(r"[-_]((?:IQ|Q|F|BF)\d\w*)$")
+
+
+def _quant_from_stem(stem: str) -> str:
+    """Extract quantisation tag from a GGUF filename stem."""
+    # Strip shard suffix first
+    clean = re.sub(r"-\d{5}-of-\d{5}$", "", stem)
+    m = _QUANT_RE.search(clean)
+    return m.group(1) if m else "latest"
 
 
 def ensure_config_dir() -> None:
@@ -145,28 +180,49 @@ def manifest_filename(org: str, repo: str, quant: str) -> str:
 
 
 def _read_manifest_map() -> tuple[dict[str, str], dict[str, list[str]]]:
-    """Parse cache manifests into model-to-GGUF mappings.
+    """Parse cache manifests and HF hub into model-to-GGUF mappings.
 
     Single source of truth for manifest parsing. Returns (model_to_gguf,
     gguf_to_models).
     """
-    cache_dir = get_cache_dir()
-    if not cache_dir.exists():
-        return {}, {}
-
     model_to_gguf: dict[str, str] = {}
-    for manifest in cache_dir.glob("manifest=*.json"):
-        parsed = parse_manifest_stem(manifest.stem)
-        if parsed is None:
-            continue
-        model_id, _, _, _ = parsed
-        try:
-            data = json.loads(manifest.read_text())
-            gguf = data.get("ggufFile", {}).get("rfilename", "")
-            if gguf:
-                model_to_gguf[model_id] = gguf
-        except (json.JSONDecodeError, OSError):
-            continue
+
+    # Legacy flat-cache manifests
+    cache_dir = get_cache_dir()
+    if cache_dir.exists():
+        for manifest in cache_dir.glob("manifest=*.json"):
+            parsed = parse_manifest_stem(manifest.stem)
+            if parsed is None:
+                continue
+            model_id, _, _, _ = parsed
+            try:
+                data = json.loads(manifest.read_text())
+                gguf = data.get("ggufFile", {}).get("rfilename", "")
+                if gguf:
+                    model_to_gguf[model_id] = gguf
+            except (json.JSONDecodeError, OSError):
+                continue
+
+    # HF hub cache (llama-server 8500+) — only scan GGUF repos
+    hf_dir = get_hf_hub_dir()
+    if hf_dir.exists():
+        for model_dir in hf_dir.glob("models--*--*-GGUF"):
+            if not model_dir.is_dir():
+                continue
+            parts = model_dir.name.split("--", 2)
+            if len(parts) < 3:
+                continue
+            org, repo = parts[1], parts[2]
+            snapshots = model_dir / "snapshots"
+            if not snapshots.exists():
+                continue
+            for gguf in snapshots.glob("**/*.gguf"):
+                if "mmproj" in gguf.name:
+                    continue
+                quant = _quant_from_stem(gguf.stem)
+                mid = f"{org}/{repo}:{quant}" if quant != "latest" else f"{org}/{repo}"
+                if mid not in model_to_gguf:
+                    model_to_gguf[mid] = gguf.name
 
     gguf_to_models: dict[str, list[str]] = {}
     for mid, gguf in model_to_gguf.items():
@@ -242,31 +298,56 @@ def get_gguf_model_groups() -> list[list[str]]:
 def find_model_gguf_files(model_id: str) -> list[Path]:
     """Find all .gguf files in cache for a model ID (excluding mmproj).
 
-    Cache is flat: files are named org_repo-GGUF_filename.gguf
+    Searches HF hub cache first, then falls back to flat cache.
     """
+    files: list[Path] = []
+    seen: set[Path] = set()
+
+    # HF hub format: models--org--repo/snapshots/hash/*.gguf
+    hf_dir = _hf_model_dir_for_id(model_id)
+    snapshots = hf_dir / "snapshots"
+    if snapshots.exists():
+        for f in snapshots.glob("**/*.gguf"):
+            resolved = f.resolve()
+            if "mmproj" not in f.name and resolved not in seen:
+                files.append(f)
+                seen.add(resolved)
+
+    # Flat cache fallback: org_repo_filename.gguf
     cache_dir = get_cache_dir()
-    if not cache_dir.exists():
-        return []
-    base_repo = model_id.split(":")[0]
-    prefix = base_repo.replace("/", "_") + "_"
-    return sorted(
-        f
-        for f in cache_dir.glob(f"{prefix}*.gguf")
-        if "mmproj" not in f.name
-    )
+    if cache_dir.exists():
+        base_repo = model_id.split(":")[0]
+        prefix = base_repo.replace("/", "_") + "_"
+        for f in cache_dir.glob(f"{prefix}*.gguf"):
+            resolved = f.resolve()
+            if "mmproj" not in f.name and resolved not in seen:
+                files.append(f)
+                seen.add(resolved)
+
+    return sorted(files)
 
 
 def find_model_manifests(model_id: str) -> list[Path]:
     """Find manifest files in cache for a model ID.
 
-    Manifest format: manifest=org=repo=quant.json
+    Checks both flat cache (manifest=org=repo=quant.json) and HF hub.
     """
-    cache_dir = get_cache_dir()
-    if not cache_dir.exists():
-        return []
+    results: list[Path] = []
     base_repo = model_id.split(":")[0]
     org, repo = base_repo.split("/", 1)
-    return sorted(cache_dir.glob(f"manifest={org}={repo}=*.json"))
+
+    # Flat cache manifests
+    cache_dir = get_cache_dir()
+    if cache_dir.exists():
+        results.extend(cache_dir.glob(f"manifest={org}={repo}=*.json"))
+
+    # HF hub manifest (llb-created)
+    hf_dir = hf_model_dir(org, repo)
+    manifest = hf_dir / "llb_manifest.json"
+    if manifest.exists():
+        results.append(manifest)
+
+    return sorted(results)
 
 
 # ---------------------------------------------------------------------------

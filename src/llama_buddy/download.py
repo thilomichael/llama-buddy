@@ -25,6 +25,8 @@ from llama_buddy.config import (
     find_model_gguf_files,
     find_model_manifests,
     get_cache_dir,
+    get_hf_hub_dir,
+    hf_model_dir,
     manifest_filename,
     parse_manifest_stem,
     read_preset,
@@ -88,6 +90,13 @@ def _search_hf(query: str, limit: int = 20) -> list[dict]:
         else:
             rest.append(entry)
     return exact + rest
+
+
+def _get_repo_commit(client: httpx.Client, repo_id: str) -> str:
+    """Fetch the latest commit SHA for a repo's main branch."""
+    resp = client.get(f"{HF_API}/{repo_id}/revision/main")
+    resp.raise_for_status()
+    return resp.json()["sha"]
 
 
 def _get_repo_files(repo_id: str) -> list[dict]:
@@ -177,6 +186,24 @@ def _merge_shards(files: list[dict]) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
+def _find_file_in_caches(org: str, repo: str, filename: str) -> Path | None:
+    """Find a GGUF file in HF hub or flat cache, return the path or None."""
+    # HF hub
+    model_dir = hf_model_dir(org, repo)
+    snapshots = model_dir / "snapshots"
+    if snapshots.exists():
+        for f in snapshots.glob(f"**/{Path(filename).name}"):
+            return f
+    # Flat cache
+    cache_dir = get_cache_dir()
+    if cache_dir.exists():
+        flat_name = f"{org}_{repo}_{filename.replace('/', '_')}"
+        flat = cache_dir / flat_name
+        if flat.exists():
+            return flat
+    return None
+
+
 def _find_partial_downloads() -> list[dict]:
     """Scan cache manifests for files that are missing or incomplete.
 
@@ -184,24 +211,53 @@ def _find_partial_downloads() -> list[dict]:
     size, downloaded.
     """
     cache_dir = get_cache_dir()
-    if not cache_dir.exists():
-        return []
-
     partials: list[dict] = []
-    for manifest_path in sorted(cache_dir.glob("manifest=*.json")):
-        parsed = parse_manifest_stem(manifest_path.stem)
-        if parsed is None:
+
+    # Collect manifests from flat cache
+    manifest_paths: list[Path] = []
+    if cache_dir.exists():
+        manifest_paths.extend(sorted(cache_dir.glob("manifest=*.json")))
+
+    # Also collect llb_manifest.json from HF hub dirs
+    hf_dir = get_hf_hub_dir()
+    if hf_dir.exists():
+        for m in hf_dir.glob("models--*--*-GGUF/llb_manifest.json"):
+            manifest_paths.append(m)
+
+    seen_ids: set[str] = set()
+    for manifest_path in manifest_paths:
+        if manifest_path.name == "llb_manifest.json":
+            # Parse from HF hub dir name
+            parts = manifest_path.parent.name.split("--", 2)
+            if len(parts) < 3:
+                continue
+            org, repo = parts[1], parts[2]
+            try:
+                data = json.loads(manifest_path.read_text())
+                gguf_info = data.get("ggufFile", {})
+                filename = gguf_info.get("rfilename", "")
+                size = gguf_info.get("size", 0)
+            except (json.JSONDecodeError, OSError):
+                continue
+            from llama_buddy.config import _quant_from_stem
+            quant = _quant_from_stem(Path(filename).stem) if filename else "latest"
+            model_id = f"{org}/{repo}:{quant}" if quant != "latest" else f"{org}/{repo}"
+        else:
+            parsed = parse_manifest_stem(manifest_path.stem)
+            if parsed is None:
+                continue
+            model_id, org, repo, quant = parsed
+            try:
+                data = json.loads(manifest_path.read_text())
+                gguf_info = data.get("ggufFile", {})
+                filename = gguf_info.get("rfilename", "")
+                size = gguf_info.get("size", 0)
+            except (json.JSONDecodeError, OSError):
+                continue
+
+        if not filename or not size or model_id in seen_ids:
             continue
-        model_id, org, repo, quant = parsed
-        try:
-            data = json.loads(manifest_path.read_text())
-            gguf_info = data.get("ggufFile", {})
-            filename = gguf_info.get("rfilename", "")
-            size = gguf_info.get("size", 0)
-        except (json.JSONDecodeError, OSError):
-            continue
-        if not filename or not size:
-            continue
+        seen_ids.add(model_id)
 
         # Detect multi-shard models from filename pattern
         m = _SHARD_RE.search(filename)
@@ -212,9 +268,8 @@ def _find_partial_downloads() -> list[dict]:
             all_complete = True
             for i in range(1, total_count + 1):
                 sf = f"{prefix}-{i:05d}-of-{total_count:05d}.gguf"
-                cache_fn = f"{org}_{repo}_{sf.replace('/', '_')}"
-                dest = cache_dir / cache_fn
-                dl = dest.stat().st_size if dest.exists() else 0
+                found = _find_file_in_caches(org, repo, sf)
+                dl = found.stat().st_size if found else 0
                 total_downloaded += dl
                 if dl == 0:
                     all_complete = False
@@ -234,9 +289,8 @@ def _find_partial_downloads() -> list[dict]:
                 )
         else:
             # Single file
-            cache_filename = f"{org}_{repo}_{filename.replace('/', '_')}"
-            dest = cache_dir / cache_filename
-            downloaded = dest.stat().st_size if dest.exists() else 0
+            found = _find_file_in_caches(org, repo, filename)
+            downloaded = found.stat().st_size if found else 0
 
             if downloaded < size:
                 display_quant = _extract_quant(filename)
@@ -697,7 +751,11 @@ def _create_manifest(
     filename: str,
     size: int,
 ) -> None:
-    """Create a manifest JSON so llama-server recognises the cached model."""
+    """Create a manifest JSON for model tracking.
+
+    Writes both a flat-cache manifest and an llb manifest in the HF hub dir.
+    """
+    # Legacy flat-cache manifest
     manifest_name = manifest_filename(org, repo, quant)
     manifest = {
         "ggufFile": {
@@ -706,6 +764,13 @@ def _create_manifest(
         }
     }
     (cache_dir / manifest_name).write_text(json.dumps(manifest, indent=2))
+
+    # HF hub manifest
+    hf_dir = hf_model_dir(org, repo)
+    if hf_dir.exists():
+        (hf_dir / "llb_manifest.json").write_text(
+            json.dumps(manifest, indent=2)
+        )
 
 
 def _resolve_download_target(
@@ -760,6 +825,25 @@ def _resolve_download_target(
 # ---------------------------------------------------------------------------
 
 
+def _setup_hf_hub_entry(
+    org: str,
+    repo_name: str,
+    commit_sha: str,
+) -> Path:
+    """Create HF hub directory structure and return the snapshot dir.
+
+    Structure: models--org--repo/snapshots/{sha}/
+    Also writes refs/main with the commit SHA.
+    """
+    model_dir = hf_model_dir(org, repo_name)
+    snapshot_dir = model_dir / "snapshots" / commit_sha
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    refs_dir = model_dir / "refs"
+    refs_dir.mkdir(parents=True, exist_ok=True)
+    (refs_dir / "main").write_text(commit_sha)
+    return snapshot_dir
+
+
 def _download_files(
     repo_id: str,
     chosen: dict,
@@ -770,6 +854,8 @@ def _download_files(
 ) -> str:
     """Download one or more GGUF files for a model.
 
+    Downloads to HF hub structure. Also creates a flat-cache symlink
+    for backward compatibility.
     Returns the first shard's filename (used for the manifest).
     """
     shard_files = chosen.get("shard_files")
@@ -781,6 +867,15 @@ def _download_files(
     total_size = sum(_file_size(f) for f in file_list)
     first_filename = file_list[0]["path"]
 
+    # Fetch commit SHA and set up HF hub directory
+    try:
+        with httpx.Client(timeout=15, follow_redirects=True) as client:
+            commit_sha = _get_repo_commit(client, repo_id)
+    except (httpx.HTTPError, KeyError):
+        import hashlib
+        commit_sha = hashlib.sha1(repo_id.encode()).hexdigest()
+    snapshot_dir = _setup_hf_hub_entry(org, repo_name, commit_sha)
+
     # Create manifest early referencing the first shard
     _create_manifest(cache_dir, org, repo_name,
                      _extract_quant(first_filename), first_filename,
@@ -790,12 +885,27 @@ def _download_files(
     for f in file_list:
         filename = f["path"]
         size = _file_size(f)
-        cache_filename = f"{org}_{repo_name}_{filename.replace('/', '_')}"
-        dest = cache_dir / cache_filename
+
+        # Primary destination: HF hub snapshot dir
+        dest = snapshot_dir / filename
+        dest.parent.mkdir(parents=True, exist_ok=True)
+
+        # Also check flat-cache location for existing downloads
+        flat_name = f"{org}_{repo_name}_{filename.replace('/', '_')}"
+        flat_dest = cache_dir / flat_name
+
+        # If file exists in flat cache but not in HF hub, create symlink
+        flat_ok = flat_dest.exists() and flat_dest.stat().st_size >= size > 0
+        if not dest.exists() and flat_ok:
+            dest.symlink_to(flat_dest.resolve())
+            console.print(
+                f"Linked existing cache: {filename}", style="yellow"
+            )
+            continue
 
         if dest.exists() and dest.stat().st_size >= size > 0:
             console.print(
-                f"File already cached: {dest.name}", style="yellow"
+                f"File already cached: {filename}", style="yellow"
             )
             continue
 
@@ -814,7 +924,7 @@ def _download_files(
             )
         etag = _download_gguf(repo_id, filename, dest, size)
         if etag:
-            (cache_dir / f"{cache_filename}.etag").write_text(etag)
+            (dest.parent / f"{dest.name}.etag").write_text(etag)
 
     if all_cached and shard_files:
         console.print("All parts already cached.", style="yellow")
@@ -1120,8 +1230,11 @@ def _remove_model(section: str, keep_files: bool) -> None:
     """Remove a model: preset entry, manifest, and optionally GGUF files.
 
     GGUF files are only deleted if no other manifest still references them.
+    Cleans up both flat cache and HF hub entries.
     """
-    from llama_buddy.config import get_model_groups
+    import shutil
+
+    from llama_buddy.config import _hf_model_dir_for_id, get_model_groups
 
     preset = read_preset()
     if preset.has_section(section):
@@ -1135,18 +1248,36 @@ def _remove_model(section: str, keep_files: bool) -> None:
     for f in find_model_manifests(section):
         # Only delete manifests specific to this model's quant
         quant = section.split(":")[-1] if ":" in section else "latest"
-        if f"={quant}.json" in f.name or f"={quant.lower()}.json" in f.name:
+        is_match = (
+            f.name == "llb_manifest.json"
+            or f"={quant}.json" in f.name
+            or f"={quant.lower()}.json" in f.name
+        )
+        if is_match:
             f.unlink()
             console.print(f"Deleted {f.name}", style="dim")
 
     # Only delete GGUF files if no siblings remain
     if not keep_files and not siblings:
         for f in find_model_gguf_files(section):
+            # Resolve symlinks before deleting
+            resolved = f.resolve()
             f.unlink()
+            # If it was a symlink, also delete the target
+            if resolved != f and resolved.exists():
+                resolved.unlink()
             etag = f.parent / f"{f.name}.etag"
             if etag.exists():
                 etag.unlink()
             console.print(f"Deleted {f.name}", style="dim")
+
+        # Clean up HF hub model dir if empty of GGUFs
+        hf_dir = _hf_model_dir_for_id(section)
+        if hf_dir.exists():
+            remaining = list(hf_dir.glob("snapshots/**/*.gguf"))
+            if not remaining:
+                shutil.rmtree(hf_dir)
+                console.print(f"Removed {hf_dir.name}", style="dim")
     elif not keep_files and siblings:
         console.print(
             f"Keeping GGUF files (shared with {', '.join(siblings)})",
