@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import re
 import threading
 import time
@@ -23,12 +22,8 @@ from rich.text import Text
 
 from llama_buddy.config import (
     find_model_gguf_files,
-    find_model_manifests,
-    get_cache_dir,
     get_hf_hub_dir,
     hf_model_dir,
-    manifest_filename,
-    parse_manifest_stem,
     read_preset,
     resolve_model,
     write_preset,
@@ -187,124 +182,61 @@ def _merge_shards(files: list[dict]) -> list[dict]:
 
 
 def _find_file_in_caches(org: str, repo: str, filename: str) -> Path | None:
-    """Find a GGUF file in HF hub or flat cache, return the path or None."""
-    # HF hub
+    """Find a GGUF file in HF hub cache, return the path or None."""
     model_dir = hf_model_dir(org, repo)
     snapshots = model_dir / "snapshots"
     if snapshots.exists():
         for f in snapshots.glob(f"**/{Path(filename).name}"):
-            return f
-    # Flat cache
-    cache_dir = get_cache_dir()
-    if cache_dir.exists():
-        flat_name = f"{org}_{repo}_{filename.replace('/', '_')}"
-        flat = cache_dir / flat_name
-        if flat.exists():
-            return flat
+            if f.exists():  # symlink target must exist
+                return f
     return None
 
 
 def _find_partial_downloads() -> list[dict]:
-    """Scan cache manifests for files that are missing or incomplete.
+    """Scan HF hub blobs dirs for incomplete downloads (.tmp-* files).
 
     Returns a list of dicts with keys: model_id, repo_id, filename, quant,
-    size, downloaded.
+    display_name, size, downloaded.
     """
-    cache_dir = get_cache_dir()
-    partials: list[dict] = []
+    from llama_buddy.config import _quant_from_stem
 
-    # Collect manifests from flat cache
-    manifest_paths: list[Path] = []
-    if cache_dir.exists():
-        manifest_paths.extend(sorted(cache_dir.glob("manifest=*.json")))
-
-    # Also collect llb_manifest.json from HF hub dirs
     hf_dir = get_hf_hub_dir()
-    if hf_dir.exists():
-        for m in hf_dir.glob("models--*--*-GGUF/llb_manifest.json"):
-            manifest_paths.append(m)
+    if not hf_dir.exists():
+        return []
 
-    seen_ids: set[str] = set()
-    for manifest_path in manifest_paths:
-        if manifest_path.name == "llb_manifest.json":
-            # Parse from HF hub dir name
-            parts = manifest_path.parent.name.split("--", 2)
-            if len(parts) < 3:
-                continue
-            org, repo = parts[1], parts[2]
-            try:
-                data = json.loads(manifest_path.read_text())
-                gguf_info = data.get("ggufFile", {})
-                filename = gguf_info.get("rfilename", "")
-                size = gguf_info.get("size", 0)
-            except (json.JSONDecodeError, OSError):
-                continue
-            from llama_buddy.config import _quant_from_stem
-            quant = _quant_from_stem(Path(filename).stem) if filename else "latest"
-            model_id = f"{org}/{repo}:{quant}" if quant != "latest" else f"{org}/{repo}"
-        else:
-            parsed = parse_manifest_stem(manifest_path.stem)
-            if parsed is None:
-                continue
-            model_id, org, repo, quant = parsed
-            try:
-                data = json.loads(manifest_path.read_text())
-                gguf_info = data.get("ggufFile", {})
-                filename = gguf_info.get("rfilename", "")
-                size = gguf_info.get("size", 0)
-            except (json.JSONDecodeError, OSError):
-                continue
-
-        if not filename or not size or model_id in seen_ids:
+    partials: list[dict] = []
+    for model_dir in hf_dir.glob("models--*--*"):
+        if not model_dir.is_dir():
             continue
-        seen_ids.add(model_id)
+        blobs_dir = model_dir / "blobs"
+        if not blobs_dir.exists():
+            continue
 
-        # Detect multi-shard models from filename pattern
-        m = _SHARD_RE.search(filename)
-        if m:
-            total_count = int(m.group(2))
-            prefix = filename[: m.start()]
-            total_downloaded = 0
-            all_complete = True
-            for i in range(1, total_count + 1):
-                sf = f"{prefix}-{i:05d}-of-{total_count:05d}.gguf"
-                found = _find_file_in_caches(org, repo, sf)
-                dl = found.stat().st_size if found else 0
-                total_downloaded += dl
-                if dl == 0:
-                    all_complete = False
-            if not all_complete:
-                display_quant = _extract_quant(filename)
-                partials.append(
-                    {
-                        "model_id": model_id,
-                        "repo_id": f"{org}/{repo}",
-                        "filename": filename,
-                        "quant": quant,
-                        "display_name": f"{org}/{repo} ({display_quant})",
-                        "size": size,
-                        "downloaded": total_downloaded,
-                        "shard_files": True,
-                    }
-                )
-        else:
-            # Single file
-            found = _find_file_in_caches(org, repo, filename)
-            downloaded = found.stat().st_size if found else 0
+        parts = model_dir.name.split("--", 2)
+        if len(parts) < 3:
+            continue
+        org, repo = parts[1], parts[2]
 
-            if downloaded < size:
-                display_quant = _extract_quant(filename)
-                partials.append(
-                    {
-                        "model_id": model_id,
-                        "repo_id": f"{org}/{repo}",
-                        "filename": filename,
-                        "quant": quant,
-                        "display_name": f"{org}/{repo} ({display_quant})",
-                        "size": size,
-                        "downloaded": downloaded,
-                    }
-                )
+        for tmp in blobs_dir.glob(".tmp-*"):
+            # Recover filename from .tmp-{name_with_underscores}
+            filename = tmp.name.removeprefix(".tmp-").replace("_", "/", 1)
+            # Best-effort: use the stem for quant extraction
+            stem = Path(filename).stem
+            quant = _quant_from_stem(stem)
+            display_quant = _extract_quant(filename)
+            model_id = f"{org}/{repo}:{quant}" if quant != "latest" else f"{org}/{repo}"
+
+            partials.append(
+                {
+                    "model_id": model_id,
+                    "repo_id": f"{org}/{repo}",
+                    "filename": filename,
+                    "quant": quant,
+                    "display_name": f"{org}/{repo} ({display_quant})",
+                    "size": 0,  # unknown without manifest
+                    "downloaded": tmp.stat().st_size,
+                }
+            )
     return partials
 
 
@@ -693,7 +625,9 @@ def _download_gguf(
     """Download a GGUF file with a Rich progress bar and resume support.
 
     If *dest* already exists and is smaller than *size*, resumes from where
-    it left off using an HTTP Range request.  Returns the ETag.
+    it left off using an HTTP Range request.  Returns the ETag (stripped of
+    quotes), which is the SHA-256 content hash used as the blob filename in
+    the HF hub cache.
     """
     url = f"https://huggingface.co/{repo_id}/resolve/main/{filename}"
     existing = dest.stat().st_size if dest.exists() else 0
@@ -709,7 +643,7 @@ def _download_gguf(
     ) as client:
         with client.stream("GET", url, headers=headers) as resp:
             resp.raise_for_status()
-            etag = resp.headers.get("etag")
+            etag = resp.headers.get("etag", "").strip('"')
 
             if resp.status_code == 206:
                 # Partial content — resume
@@ -740,37 +674,8 @@ def _download_gguf(
                         f.write(chunk)
                         progress.update(task, advance=len(chunk))
 
-    return etag
+    return etag or None
 
-
-def _create_manifest(
-    cache_dir: Path,
-    org: str,
-    repo: str,
-    quant: str,
-    filename: str,
-    size: int,
-) -> None:
-    """Create a manifest JSON for model tracking.
-
-    Writes both a flat-cache manifest and an llb manifest in the HF hub dir.
-    """
-    # Legacy flat-cache manifest
-    manifest_name = manifest_filename(org, repo, quant)
-    manifest = {
-        "ggufFile": {
-            "rfilename": filename,
-            "size": size,
-        }
-    }
-    (cache_dir / manifest_name).write_text(json.dumps(manifest, indent=2))
-
-    # HF hub manifest
-    hf_dir = hf_model_dir(org, repo)
-    if hf_dir.exists():
-        (hf_dir / "llb_manifest.json").write_text(
-            json.dumps(manifest, indent=2)
-        )
 
 
 def _resolve_download_target(
@@ -829,34 +734,43 @@ def _setup_hf_hub_entry(
     org: str,
     repo_name: str,
     commit_sha: str,
-) -> Path:
-    """Create HF hub directory structure and return the snapshot dir.
+) -> tuple[Path, Path, Path]:
+    """Create HF hub directory structure.
 
-    Structure: models--org--repo/snapshots/{sha}/
-    Also writes refs/main with the commit SHA.
+    Replicates the native HuggingFace hub layout:
+        models--org--repo/
+            refs/main           (commit SHA)
+            blobs/{content-hash} (actual file data)
+            snapshots/{sha}/
+                file.gguf       (symlink → ../../blobs/{hash})
+
+    Returns (model_dir, snapshot_dir, blobs_dir).
     """
     model_dir = hf_model_dir(org, repo_name)
     snapshot_dir = model_dir / "snapshots" / commit_sha
+    blobs_dir = model_dir / "blobs"
     snapshot_dir.mkdir(parents=True, exist_ok=True)
+    blobs_dir.mkdir(parents=True, exist_ok=True)
     refs_dir = model_dir / "refs"
     refs_dir.mkdir(parents=True, exist_ok=True)
     (refs_dir / "main").write_text(commit_sha)
-    return snapshot_dir
+    return model_dir, snapshot_dir, blobs_dir
 
 
 def _download_files(
     repo_id: str,
     chosen: dict,
-    cache_dir: Path,
     org: str,
     repo_name: str,
     model_id: str,
 ) -> str:
     """Download one or more GGUF files for a model.
 
-    Downloads to HF hub structure. Also creates a flat-cache symlink
-    for backward compatibility.
-    Returns the first shard's filename (used for the manifest).
+    Downloads into the native HF hub cache layout (blobs + snapshot symlinks)
+    so that llama-server can find them via ``--hf-repo`` without any extra
+    configuration.
+
+    Returns the first shard's filename.
     """
     shard_files = chosen.get("shard_files")
     if shard_files:
@@ -874,41 +788,40 @@ def _download_files(
     except (httpx.HTTPError, KeyError):
         import hashlib
         commit_sha = hashlib.sha1(repo_id.encode()).hexdigest()
-    snapshot_dir = _setup_hf_hub_entry(org, repo_name, commit_sha)
-
-    # Create manifest early referencing the first shard
-    _create_manifest(cache_dir, org, repo_name,
-                     _extract_quant(first_filename), first_filename,
-                     total_size)
+    _, snapshot_dir, blobs_dir = _setup_hf_hub_entry(
+        org, repo_name, commit_sha,
+    )
 
     all_cached = True
     for f in file_list:
         filename = f["path"]
         size = _file_size(f)
 
-        # Primary destination: HF hub snapshot dir
-        dest = snapshot_dir / filename
-        dest.parent.mkdir(parents=True, exist_ok=True)
+        link = snapshot_dir / filename
+        link.parent.mkdir(parents=True, exist_ok=True)
 
-        # Also check flat-cache location for existing downloads
-        flat_name = f"{org}_{repo_name}_{filename.replace('/', '_')}"
-        flat_dest = cache_dir / flat_name
+        # If snapshot symlink already points to a valid blob, skip
+        if link.is_symlink() and link.exists():
+            blob = link.resolve()
+            if blob.stat().st_size >= size > 0:
+                console.print(
+                    f"File already cached: {filename}", style="yellow"
+                )
+                continue
 
-        # If file exists in flat cache but not in HF hub, create symlink
-        flat_ok = flat_dest.exists() and flat_dest.stat().st_size >= size > 0
-        if not dest.exists() and flat_ok:
-            dest.symlink_to(flat_dest.resolve())
-            console.print(
-                f"Linked existing cache: {filename}", style="yellow"
-            )
-            continue
-
-        if dest.exists() and dest.stat().st_size >= size > 0:
+        # Check if there's an existing blob we can reuse (e.g. migrated
+        # by llama-server from flat cache, or a previous partial)
+        existing_blob = _find_existing_blob(
+            blobs_dir, link, filename, size,
+        )
+        if existing_blob is not None:
+            _ensure_snapshot_link(link, existing_blob, blobs_dir)
             console.print(
                 f"File already cached: {filename}", style="yellow"
             )
             continue
 
+        # Need to download
         all_cached = False
         if shard_files:
             shard_idx = file_list.index(f) + 1
@@ -917,19 +830,79 @@ def _download_files(
                 f" ({_human_size(size)})…"
             )
         else:
-            action = "Resuming" if dest.exists() else "Downloading"
+            action = "Resuming" if link.exists() else "Downloading"
             console.print(
                 f"{action} [bold]{model_id}[/bold]"
                 f" ({_human_size(total_size)})…"
             )
-        etag = _download_gguf(repo_id, filename, dest, size)
+
+        # Download to a temp file in blobs, then rename to etag hash
+        tmp_blob = blobs_dir / f".tmp-{filename.replace('/', '_')}"
+        etag = _download_gguf(repo_id, filename, tmp_blob, size)
         if etag:
-            (dest.parent / f"{dest.name}.etag").write_text(etag)
+            blob_path = blobs_dir / etag
+            tmp_blob.rename(blob_path)
+        else:
+            # No etag — use SHA-1 of content as fallback blob name
+            import hashlib
+            h = hashlib.sha1(tmp_blob.read_bytes()).hexdigest()
+            blob_path = blobs_dir / h
+            tmp_blob.rename(blob_path)
+
+        _ensure_snapshot_link(link, blob_path, blobs_dir)
 
     if all_cached and shard_files:
         console.print("All parts already cached.", style="yellow")
 
     return first_filename
+
+
+def _find_existing_blob(
+    blobs_dir: Path, link: Path, filename: str, size: int,
+) -> Path | None:
+    """Check if a complete blob already exists for this file.
+
+    Checks: (1) existing non-symlink file at the snapshot path,
+    (2) any blob that the snapshot symlink points to.
+    """
+    # Real file at snapshot path (not a symlink) — e.g. from old llb download
+    if link.exists() and not link.is_symlink():
+        if link.stat().st_size >= size > 0:
+            return link
+    return None
+
+
+def _ensure_snapshot_link(link: Path, blob: Path, blobs_dir: Path) -> None:
+    """Ensure the snapshot entry is a symlink to the blob.
+
+    If blob is outside blobs_dir (e.g. a real file at the snapshot path from
+    an old download), move it into blobs first.
+    """
+    try:
+        blob_resolved = blob.resolve()
+        blobs_resolved = blobs_dir.resolve()
+        in_blobs = str(blob_resolved).startswith(str(blobs_resolved) + "/")
+    except OSError:
+        in_blobs = False
+
+    if not in_blobs:
+        # Move the file into blobs (e.g. old direct-download in snapshots)
+        import hashlib
+        content_hash = hashlib.sha1(blob.read_bytes()).hexdigest()
+        new_blob = blobs_dir / content_hash
+        if not new_blob.exists():
+            blob.rename(new_blob)
+        else:
+            blob.unlink()
+        blob = new_blob
+
+    # Create relative symlink: snapshots/{sha}/file.gguf -> ../../blobs/{hash}
+    rel = Path("../../blobs") / blob.name
+    if link.is_symlink():
+        link.unlink()
+    elif link.exists():
+        link.unlink()
+    link.symlink_to(rel)
 
 
 # GGUF general.sampling.* → llama-server INI key mapping
@@ -1059,12 +1032,9 @@ def download(model_id: str | None = None, alias: str | None = None) -> None:
         repo_id, chosen, quant = _resolve_download_target(model_id)
         model_id = f"{repo_id}:{quant}"
 
-    # Prepare cache paths
     org, repo_name = repo_id.split("/", 1)
-    cache_dir = get_cache_dir()
-    cache_dir.mkdir(parents=True, exist_ok=True)
 
-    _download_files(repo_id, chosen, cache_dir, org, repo_name, model_id)
+    _download_files(repo_id, chosen, org, repo_name, model_id)
 
     # Add to preset (if not already there)
     preset = read_preset()
@@ -1227,10 +1197,9 @@ def _pick_remove_interactive() -> str:
 
 
 def _remove_model(section: str, keep_files: bool) -> None:
-    """Remove a model: preset entry, manifest, and optionally GGUF files.
+    """Remove a model: preset entry and optionally GGUF files + blobs.
 
-    GGUF files are only deleted if no other manifest still references them.
-    Cleans up both flat cache and HF hub entries.
+    GGUF files are only deleted if no other models share them.
     """
     import shutil
 
@@ -1244,34 +1213,17 @@ def _remove_model(section: str, keep_files: bool) -> None:
     # Check if other models share the same GGUF files
     siblings = get_model_groups().get(section, [])
 
-    # Delete manifest(s) for this model only
-    for f in find_model_manifests(section):
-        # Only delete manifests specific to this model's quant
-        quant = section.split(":")[-1] if ":" in section else "latest"
-        is_match = (
-            f.name == "llb_manifest.json"
-            or f"={quant}.json" in f.name
-            or f"={quant.lower()}.json" in f.name
-        )
-        if is_match:
-            f.unlink()
-            console.print(f"Deleted {f.name}", style="dim")
-
     # Only delete GGUF files if no siblings remain
     if not keep_files and not siblings:
         for f in find_model_gguf_files(section):
-            # Resolve symlinks before deleting
+            # Delete blob (symlink target) and the snapshot symlink
             resolved = f.resolve()
             f.unlink()
-            # If it was a symlink, also delete the target
             if resolved != f and resolved.exists():
                 resolved.unlink()
-            etag = f.parent / f"{f.name}.etag"
-            if etag.exists():
-                etag.unlink()
             console.print(f"Deleted {f.name}", style="dim")
 
-        # Clean up HF hub model dir if empty of GGUFs
+        # Clean up HF hub model dir if no GGUFs remain
         hf_dir = _hf_model_dir_for_id(section)
         if hf_dir.exists():
             remaining = list(hf_dir.glob("snapshots/**/*.gguf"))

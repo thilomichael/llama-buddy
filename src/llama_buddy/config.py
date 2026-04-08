@@ -157,53 +157,15 @@ def resolve_model(name: str) -> str | None:
     return None
 
 
-def parse_manifest_stem(stem: str) -> tuple[str, str, str, str] | None:
-    """Parse a manifest filename stem into (model_id, org, repo, quant).
-
-    Stem format: manifest=org=repo=quant
-    Returns None if the stem doesn't match the expected format.
-    """
-    parts = stem.split("=")
-    if len(parts) != 4:
-        return None
-    _, org, repo, quant = parts
-    if quant.lower() == "latest":
-        model_id = f"{org}/{repo}"
-    else:
-        model_id = f"{org}/{repo}:{quant}"
-    return model_id, org, repo, quant
-
-
-def manifest_filename(org: str, repo: str, quant: str) -> str:
-    """Build a manifest filename from components."""
-    return f"manifest={org}={repo}={quant}.json"
-
 
 def _read_manifest_map() -> tuple[dict[str, str], dict[str, list[str]]]:
-    """Parse cache manifests and HF hub into model-to-GGUF mappings.
+    """Scan HF hub cache for model-to-GGUF mappings.
 
-    Single source of truth for manifest parsing. Returns (model_to_gguf,
+    Single source of truth for model discovery. Returns (model_to_gguf,
     gguf_to_models).
     """
     model_to_gguf: dict[str, str] = {}
 
-    # Legacy flat-cache manifests
-    cache_dir = get_cache_dir()
-    if cache_dir.exists():
-        for manifest in cache_dir.glob("manifest=*.json"):
-            parsed = parse_manifest_stem(manifest.stem)
-            if parsed is None:
-                continue
-            model_id, _, _, _ = parsed
-            try:
-                data = json.loads(manifest.read_text())
-                gguf = data.get("ggufFile", {}).get("rfilename", "")
-                if gguf:
-                    model_to_gguf[model_id] = gguf
-            except (json.JSONDecodeError, OSError):
-                continue
-
-    # HF hub cache (llama-server 8500+) — only scan GGUF repos
     hf_dir = get_hf_hub_dir()
     if hf_dir.exists():
         for model_dir in hf_dir.glob("models--*--*-GGUF"):
@@ -237,87 +199,34 @@ def _get_manifest_model_ids() -> set[str]:
     return set(model_to_gguf.keys())
 
 
-def _link_flat_cache_to_hf_hub() -> None:
-    """Ensure flat-cache GGUFs are symlinked into HF hub so llama-server finds them.
-
-    For each HF hub model dir that has refs/main but no snapshot GGUFs,
-    look for matching files in the flat cache and create symlinks.
-    """
-    hf_dir = get_hf_hub_dir()
-    cache_dir = get_cache_dir()
-    if not hf_dir.exists() or not cache_dir.exists():
-        return
-
-    for model_dir in hf_dir.glob("models--*--*"):
-        if not model_dir.is_dir():
-            continue
-        parts = model_dir.name.split("--", 2)
-        if len(parts) < 3:
-            continue
-        org, repo = parts[1], parts[2]
-
-        # Read commit SHA from refs/main
-        refs_main = model_dir / "refs" / "main"
-        if not refs_main.exists():
-            continue
-        sha = refs_main.read_text().strip()
-        if not sha:
-            continue
-
-        snapshot_dir = model_dir / "snapshots" / sha
-
-        # Skip if snapshot already has GGUFs
-        if snapshot_dir.exists() and list(snapshot_dir.glob("**/*.gguf")):
-            continue
-
-        # Find matching flat-cache files
-        prefix = f"{org}_{repo}_"
-        flat_files = [
-            f for f in cache_dir.glob(f"{prefix}*.gguf")
-            if "mmproj" not in f.name
-        ]
-        if not flat_files:
-            continue
-
-        snapshot_dir.mkdir(parents=True, exist_ok=True)
-        for flat_file in flat_files:
-            # Recover original filename: strip org_repo_ prefix
-            original_name = flat_file.name[len(prefix):]
-            link = snapshot_dir / original_name
-            if not link.exists():
-                link.symlink_to(flat_file.resolve())
-
-
 def sync_preset_with_cache() -> list[str]:
     """Sync the preset file with the cache.
 
-    - Links flat-cache GGUFs into HF hub so llama-server can find them.
-    - Adds models found in cache manifests that are missing from the preset.
-    - Removes orphaned preset entries (no manifest and no GGUF files).
+    - Adds models found in HF hub cache that are missing from the preset.
+    - Removes orphaned preset entries (no GGUF files on disk).
 
     Returns a list of model IDs that were added.
     """
-    _link_flat_cache_to_hf_hub()
-    manifest_ids = _get_manifest_model_ids()
+    discovered_ids = _get_manifest_model_ids()
 
     preset = read_preset()
     sections = {s.lower(): s for s in preset.sections()}
     changed = False
     added: list[str] = []
 
-    # Add missing manifest models to preset
-    for model_id in sorted(manifest_ids):
+    # Add models found in HF hub cache that are missing from the preset
+    for model_id in sorted(discovered_ids):
         if model_id.lower() not in sections:
             preset.add_section(model_id)
             sections[model_id.lower()] = model_id
             added.append(model_id)
             changed = True
 
-    # Remove orphaned preset entries (no manifest, no GGUF files)
+    # Remove orphaned preset entries (no GGUF files on disk)
     for section in list(preset.sections()):
         if section == "*":
             continue
-        if section in manifest_ids:
+        if section in discovered_ids:
             continue
         if find_model_gguf_files(section):
             continue
@@ -349,14 +258,10 @@ def get_gguf_model_groups() -> list[list[str]]:
 
 
 def find_model_gguf_files(model_id: str) -> list[Path]:
-    """Find all .gguf files in cache for a model ID (excluding mmproj).
-
-    Searches HF hub cache first, then falls back to flat cache.
-    """
+    """Find all .gguf files in HF hub cache for a model ID (excluding mmproj)."""
     files: list[Path] = []
     seen: set[Path] = set()
 
-    # HF hub format: models--org--repo/snapshots/hash/*.gguf
     hf_dir = _hf_model_dir_for_id(model_id)
     snapshots = hf_dir / "snapshots"
     if snapshots.exists():
@@ -366,41 +271,8 @@ def find_model_gguf_files(model_id: str) -> list[Path]:
                 files.append(f)
                 seen.add(resolved)
 
-    # Flat cache fallback: org_repo_filename.gguf
-    cache_dir = get_cache_dir()
-    if cache_dir.exists():
-        base_repo = model_id.split(":")[0]
-        prefix = base_repo.replace("/", "_") + "_"
-        for f in cache_dir.glob(f"{prefix}*.gguf"):
-            resolved = f.resolve()
-            if "mmproj" not in f.name and resolved not in seen:
-                files.append(f)
-                seen.add(resolved)
-
     return sorted(files)
 
-
-def find_model_manifests(model_id: str) -> list[Path]:
-    """Find manifest files in cache for a model ID.
-
-    Checks both flat cache (manifest=org=repo=quant.json) and HF hub.
-    """
-    results: list[Path] = []
-    base_repo = model_id.split(":")[0]
-    org, repo = base_repo.split("/", 1)
-
-    # Flat cache manifests
-    cache_dir = get_cache_dir()
-    if cache_dir.exists():
-        results.extend(cache_dir.glob(f"manifest={org}={repo}=*.json"))
-
-    # HF hub manifest (llb-created)
-    hf_dir = hf_model_dir(org, repo)
-    manifest = hf_dir / "llb_manifest.json"
-    if manifest.exists():
-        results.append(manifest)
-
-    return sorted(results)
 
 
 # ---------------------------------------------------------------------------

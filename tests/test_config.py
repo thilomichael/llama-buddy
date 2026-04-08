@@ -101,51 +101,57 @@ def test_resolve_model_not_found(tmp_path, monkeypatch):
     assert resolve_model("nonexistent") is None
 
 
+def _make_hf_model(hf_dir, org, repo, filename):
+    """Helper to create a fake HF hub model entry."""
+    model = hf_dir / f"models--{org}--{repo}"
+    snapshot = model / "snapshots" / "abc123"
+    blobs = model / "blobs"
+    snapshot.mkdir(parents=True)
+    blobs.mkdir(parents=True)
+    blob = blobs / "deadbeef"
+    blob.write_bytes(b"x" * 100)
+    (snapshot / filename).symlink_to("../../blobs/deadbeef")
+    refs = model / "refs"
+    refs.mkdir(parents=True)
+    (refs / "main").write_text("abc123")
+
+
 def test_sync_preset_with_cache(tmp_path, monkeypatch):
     preset_file = tmp_path / "models.ini"
-    cache_dir = tmp_path / "cache"
-    cache_dir.mkdir()
+    hf_dir = tmp_path / "hf_hub"
+    hf_dir.mkdir()
     monkeypatch.setattr("llama_buddy.config.PRESET_FILE", preset_file)
     monkeypatch.setattr("llama_buddy.config.CONFIG_DIR", tmp_path)
-    monkeypatch.setattr("llama_buddy.config.get_cache_dir", lambda: cache_dir)
-    monkeypatch.setattr("llama_buddy.config.get_hf_hub_dir", lambda: tmp_path / "no_hf")
+    monkeypatch.setattr("llama_buddy.config.get_hf_hub_dir", lambda: hf_dir)
 
     # Create an existing preset with one model
     config = read_preset()
     config.add_section("org/model-GGUF:Q4_K_M")
     write_preset(config)
 
-    # Create manifests: one matching existing, two new
-    manifest_json = '{"ggufFile": {"rfilename": "model.gguf", "size": 100}}'
-    (cache_dir / "manifest=org=model-GGUF=Q4_K_M.json").write_text(manifest_json)
-    (cache_dir / "manifest=org=model-GGUF=latest.json").write_text(manifest_json)
-    (cache_dir / "manifest=other=newmodel-GGUF=Q8_0.json").write_text(manifest_json)
-    # Old-format manifest (underscore) should be ignored
-    (cache_dir / "manifest=org_oldmodel-GGUF=latest.json").write_text(manifest_json)
+    # Create HF hub entries: one matching existing, one new
+    _make_hf_model(hf_dir, "org", "model-GGUF", "model-Q4_K_M.gguf")
+    _make_hf_model(hf_dir, "other", "newmodel-GGUF", "newmodel-Q8_0.gguf")
 
     added = sync_preset_with_cache()
 
-    assert "org/model-GGUF" in added
     assert "other/newmodel-GGUF:Q8_0" in added
-    assert len(added) == 2
+    assert len(added) == 1
 
-    # Verify they're in the preset now
+    # Verify it's in the preset now
     config2 = read_preset()
-    assert "org/model-GGUF" in config2.sections()
     assert "other/newmodel-GGUF:Q8_0" in config2.sections()
 
 
 def test_sync_preset_no_duplicates(tmp_path, monkeypatch):
     preset_file = tmp_path / "models.ini"
-    cache_dir = tmp_path / "cache"
-    cache_dir.mkdir()
+    hf_dir = tmp_path / "hf_hub"
+    hf_dir.mkdir()
     monkeypatch.setattr("llama_buddy.config.PRESET_FILE", preset_file)
     monkeypatch.setattr("llama_buddy.config.CONFIG_DIR", tmp_path)
-    monkeypatch.setattr("llama_buddy.config.get_cache_dir", lambda: cache_dir)
-    monkeypatch.setattr("llama_buddy.config.get_hf_hub_dir", lambda: tmp_path / "no_hf")
+    monkeypatch.setattr("llama_buddy.config.get_hf_hub_dir", lambda: hf_dir)
 
-    manifest_json = '{"ggufFile": {"rfilename": "model.gguf", "size": 100}}'
-    (cache_dir / "manifest=org=model-GGUF=Q4_K_M.json").write_text(manifest_json)
+    _make_hf_model(hf_dir, "org", "model-GGUF", "model-Q4_K_M.gguf")
 
     # First sync adds it
     added1 = sync_preset_with_cache()

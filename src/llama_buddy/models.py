@@ -10,7 +10,6 @@ from rich.table import Table
 from llama_buddy.config import (
     DEFAULT_PORT,
     find_model_gguf_files,
-    get_cache_dir,
     get_gguf_model_groups,
     get_hf_hub_dir,
     update_vram_usage,
@@ -26,14 +25,10 @@ def get_models(port: int = DEFAULT_PORT) -> list[dict]:
 
 
 def compute_model_sizes() -> dict[str, int]:
-    """Map model repo IDs to total size of their .gguf files in cache.
-
-    Scans both HF hub cache and flat cache.
-    """
+    """Map model repo IDs to total size of their .gguf files in cache."""
     sizes: dict[str, int] = {}
-    seen: set[str] = set()  # resolved paths to avoid double-counting
+    seen: set[str] = set()
 
-    # HF hub cache
     hf_dir = get_hf_hub_dir()
     if hf_dir.exists():
         for model_dir in hf_dir.glob("models--*--*-GGUF"):
@@ -54,38 +49,7 @@ def compute_model_sizes() -> dict[str, int]:
                     seen.add(resolved)
                     sizes[repo_id] = sizes.get(repo_id, 0) + f.stat().st_size
 
-    # Flat cache fallback
-    cache_dir = get_cache_dir()
-    if cache_dir.exists():
-        for gguf_file in cache_dir.glob("*.gguf"):
-            if "mmproj" in gguf_file.name:
-                continue
-            resolved = str(gguf_file.resolve())
-            if resolved in seen:
-                continue
-            seen.add(resolved)
-            repo_key = _extract_repo_key(gguf_file.name)
-            if repo_key is None:
-                continue
-            repo_id = repo_key.replace("_", "/", 1)
-            sizes[repo_id] = sizes.get(repo_id, 0) + gguf_file.stat().st_size
-
     return sizes
-
-
-def _extract_repo_key(filename: str) -> str | None:
-    """Extract the 'org_repo' prefix from a flat-cache filename.
-
-    Filenames follow the pattern: org_repo_filename.gguf
-    where repo itself may contain underscores (from quant subfolders).
-    We match against known manifest files to find the boundary.
-    """
-    parts = filename.split("_")
-    for i in range(2, len(parts) + 1):
-        candidate = "_".join(parts[:i])
-        if candidate.endswith("-GGUF"):
-            return candidate
-    return None
 
 
 def format_size(size_bytes: int, compact: bool = True) -> str:
