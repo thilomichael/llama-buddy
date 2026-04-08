@@ -237,14 +237,67 @@ def _get_manifest_model_ids() -> set[str]:
     return set(model_to_gguf.keys())
 
 
+def _link_flat_cache_to_hf_hub() -> None:
+    """Ensure flat-cache GGUFs are symlinked into HF hub so llama-server finds them.
+
+    For each HF hub model dir that has refs/main but no snapshot GGUFs,
+    look for matching files in the flat cache and create symlinks.
+    """
+    hf_dir = get_hf_hub_dir()
+    cache_dir = get_cache_dir()
+    if not hf_dir.exists() or not cache_dir.exists():
+        return
+
+    for model_dir in hf_dir.glob("models--*--*"):
+        if not model_dir.is_dir():
+            continue
+        parts = model_dir.name.split("--", 2)
+        if len(parts) < 3:
+            continue
+        org, repo = parts[1], parts[2]
+
+        # Read commit SHA from refs/main
+        refs_main = model_dir / "refs" / "main"
+        if not refs_main.exists():
+            continue
+        sha = refs_main.read_text().strip()
+        if not sha:
+            continue
+
+        snapshot_dir = model_dir / "snapshots" / sha
+
+        # Skip if snapshot already has GGUFs
+        if snapshot_dir.exists() and list(snapshot_dir.glob("**/*.gguf")):
+            continue
+
+        # Find matching flat-cache files
+        prefix = f"{org}_{repo}_"
+        flat_files = [
+            f for f in cache_dir.glob(f"{prefix}*.gguf")
+            if "mmproj" not in f.name
+        ]
+        if not flat_files:
+            continue
+
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
+        for flat_file in flat_files:
+            # Recover original filename: strip org_repo_ prefix
+            original_name = flat_file.name[len(prefix):]
+            link = snapshot_dir / original_name
+            if not link.exists():
+                link.symlink_to(flat_file.resolve())
+
+
 def sync_preset_with_cache() -> list[str]:
     """Sync the preset file with the cache.
 
+    - Links flat-cache GGUFs into HF hub so llama-server can find them.
     - Adds models found in cache manifests that are missing from the preset.
     - Removes orphaned preset entries (no manifest and no GGUF files).
 
     Returns a list of model IDs that were added.
     """
+    _link_flat_cache_to_hf_hub()
     manifest_ids = _get_manifest_model_ids()
 
     preset = read_preset()

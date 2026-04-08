@@ -17,14 +17,6 @@ from llama_buddy.console import console
 from llama_buddy.gguf import read_metadata
 from llama_buddy.models import format_size
 
-SAMPLING_DEFAULTS = {
-    "temperature": 0.8,
-    "top_k": 40,
-    "top_p": 0.95,
-    "min_p": 0.05,
-    "repeat_penalty": 1.0,
-}
-
 
 def find_gguf_files(name: str) -> list[Path]:
     """Resolve a model name, alias, ID, or file path to .gguf files."""
@@ -173,22 +165,22 @@ def show_info(model_id_or_path: str) -> None:
     sampling_keys = {
         k: v for k, v in meta.items() if k.startswith("general.sampling.")
     }
-    if sampling_keys:
-        for key, value in sorted(sampling_keys.items()):
-            param = key.removeprefix("general.sampling.")
-            sampling.add_row(param, str(value))
-        sampling_title = "Sampling [dim](from GGUF metadata)[/dim]"
-    else:
-        for param, value in SAMPLING_DEFAULTS.items():
-            sampling.add_row(param, str(value))
-        sampling_title = "Sampling [dim](hardcoded defaults)[/dim]"
 
     # Compose output
     from rich.console import Group
 
-    body = Group(
-        general,
-        "",
-        Panel(sampling, title=sampling_title, border_style="dim", expand=False),
-    )
+    parts: list = [general]
+    if sampling_keys:
+        for key, value in sorted(sampling_keys.items()):
+            param = key.removeprefix("general.sampling.")
+            sampling.add_row(param, str(value))
+        parts.append("")
+        parts.append(Panel(
+            sampling,
+            title="Sampling [dim](from GGUF metadata)[/dim]",
+            border_style="dim",
+            expand=False,
+        ))
+
+    body = Group(*parts)
     console.print(Panel(body, title=model_name, border_style="cyan"))

@@ -217,13 +217,8 @@ def list_models(port: int = DEFAULT_PORT, sort: str = "name") -> None:
             console.print("No models configured.", style="yellow")
             return
 
-        # Filter internal sections and non-GGUF models (server auto-discovers
-        # all HF hub repos, but only -GGUF ones are loadable)
-        models = [
-            m for m in models
-            if m["id"] != "DEFAULT"
-            and m["id"].split(":")[0].endswith("-GGUF")
-        ]
+        # Filter internal sections
+        models = [m for m in models if m["id"] != "DEFAULT"]
 
         sizes = compute_model_sizes()
         vram = update_vram_usage()
