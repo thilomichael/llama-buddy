@@ -79,6 +79,11 @@ def is_bare_repo(model_id: str, all_ids: set[str]) -> bool:
     return any(other.startswith(model_id + ":") for other in all_ids)
 
 
+def _is_hex_hash(s: str) -> bool:
+    """Check if a string looks like a hex hash (32+ hex chars, nothing else)."""
+    return len(s) >= 32 and all(c in "0123456789abcdefABCDEF" for c in s)
+
+
 @lru_cache(maxsize=64)
 def get_model_meta(model_id: str) -> dict[str, str]:
     """Read model name and context length from GGUF metadata."""
@@ -90,7 +95,10 @@ def get_model_meta(model_id: str) -> dict[str, str]:
         result: dict[str, str] = {}
         name = meta.get("general.name")
         if name:
-            result["name"] = str(name)
+            name_str = str(name)
+            # Some publishers set general.name to a commit hash — ignore it
+            if not _is_hex_hash(name_str):
+                result["name"] = name_str
         arch = meta.get("general.architecture", "")
         ctx = meta.get(f"{arch}.context_length")
         if ctx is not None:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import os
 import re
 import threading
 import time
@@ -51,6 +53,11 @@ def _file_size(entry: dict) -> int:
     return entry.get("size", 0) or entry.get("lfs", {}).get("size", 0)
 
 
+def _file_oid(entry: dict) -> str | None:
+    """Get the LFS OID (blob hash) from an HF API file entry."""
+    return entry.get("lfs", {}).get("oid") or entry.get("oid")
+
+
 # ---------------------------------------------------------------------------
 # HuggingFace API helpers
 # ---------------------------------------------------------------------------
@@ -97,45 +104,36 @@ def _get_repo_commit(client: httpx.Client, repo_id: str) -> str:
 def _get_repo_files(repo_id: str) -> list[dict]:
     """Get GGUF files in a HF repo with sizes (excludes mmproj).
 
-    Checks both the repo root and subdirectories.  Split-model shards
-    (e.g. ``model-00001-of-00003.gguf``) are grouped into a single entry
-    whose ``"path"`` is the first shard, ``"size"`` is the total across all
-    shards, and ``"shard_files"`` lists every shard dict.
+    Uses the model info endpoint with ``?blobs=true`` to get all files
+    (including subdirectories) with sizes and LFS OIDs in a single call.
+
+    Split-model shards (e.g. ``model-00001-of-00003.gguf``) are grouped
+    into a single entry whose ``"path"`` is the first shard, ``"size"``
+    is the total across all shards, and ``"shard_files"`` lists every
+    shard dict.
     """
     with httpx.Client(timeout=15, follow_redirects=True) as client:
-        resp = client.get(f"{HF_API}/{repo_id}/tree/main")
+        resp = client.get(f"{HF_API}/{repo_id}?blobs=true")
         resp.raise_for_status()
-        top_level = resp.json()
+        siblings = resp.json().get("siblings", [])
 
         gguf_files: list[dict] = []
-        subdirs: list[str] = []
-        for entry in top_level:
-            if not isinstance(entry, dict):
+        for entry in siblings:
+            fname = entry.get("rfilename", "")
+            if not fname.endswith(".gguf"):
                 continue
-            if entry.get("type") == "directory":
-                subdirs.append(entry["path"])
-            elif (
-                entry.get("path", "").endswith(".gguf")
-                and "mmproj" not in entry.get("path", "").lower()
-            ):
-                gguf_files.append(entry)
-
-        # Also check subdirectories (some repos have GGUFs in both)
-        if subdirs:
-            for subdir in subdirs:
-                resp = client.get(
-                    f"{HF_API}/{repo_id}/tree/main/{subdir}"
-                )
-                if resp.status_code != 200:
-                    continue
-                for entry in resp.json():
-                    if not isinstance(entry, dict):
-                        continue
-                    if (
-                        entry.get("path", "").endswith(".gguf")
-                        and "mmproj" not in entry.get("path", "").lower()
-                    ):
-                        gguf_files.append(entry)
+            if "mmproj" in fname.lower():
+                continue
+            # Normalise to the same shape as /tree/main entries
+            lfs = entry.get("lfs", {})
+            gguf_files.append({
+                "path": fname,
+                "size": entry.get("size", 0),
+                "lfs": {
+                    "oid": lfs.get("sha256", ""),
+                    "size": lfs.get("size", 0),
+                },
+            })
 
     return _merge_shards(gguf_files)
 
@@ -193,7 +191,7 @@ def _find_file_in_caches(org: str, repo: str, filename: str) -> Path | None:
 
 
 def _find_partial_downloads() -> list[dict]:
-    """Scan HF hub blobs dirs for incomplete downloads (.tmp-* files).
+    """Scan HF hub blobs dirs for .downloadInProgress files.
 
     Returns a list of dicts with keys: model_id, repo_id, filename, quant,
     display_name, size, downloaded.
@@ -217,24 +215,38 @@ def _find_partial_downloads() -> list[dict]:
             continue
         org, repo = parts[1], parts[2]
 
-        for tmp in blobs_dir.glob(".tmp-*"):
-            # Recover filename from .tmp-{name_with_underscores}
-            filename = tmp.name.removeprefix(".tmp-").replace("_", "/", 1)
-            # Best-effort: use the stem for quant extraction
-            stem = Path(filename).stem
-            quant = _quant_from_stem(stem)
-            display_quant = _extract_quant(filename)
-            model_id = f"{org}/{repo}:{quant}" if quant != "latest" else f"{org}/{repo}"
+        for wip in blobs_dir.glob("*.downloadInProgress"):
+            # OID is the filename minus the suffix — we can't recover
+            # the original GGUF filename from it, so use the repo name
+            quant = "unknown"
+            display_name = f"{org}/{repo}"
+            model_id = f"{org}/{repo}"
+
+            # Try to find the quant from snapshot symlinks in this repo
+            # (check both broken and valid symlinks — for multi-shard
+            # models some shards may already be complete)
+            snapshots = model_dir / "snapshots"
+            if snapshots.exists():
+                for gguf in snapshots.glob("**/*.gguf"):
+                    if gguf.is_symlink():
+                        quant = _quant_from_stem(gguf.stem)
+                        display_name = f"{org}/{repo} ({_extract_quant(gguf.name)})"
+                        model_id = (
+                            f"{org}/{repo}:{quant}"
+                            if quant != "unknown"
+                            else f"{org}/{repo}"
+                        )
+                        break
 
             partials.append(
                 {
                     "model_id": model_id,
                     "repo_id": f"{org}/{repo}",
-                    "filename": filename,
+                    "filename": "",
                     "quant": quant,
-                    "display_name": f"{org}/{repo} ({display_quant})",
-                    "size": 0,  # unknown without manifest
-                    "downloaded": tmp.stat().st_size,
+                    "display_name": display_name,
+                    "size": 0,
+                    "downloaded": wip.stat().st_size,
                 }
             )
     return partials
@@ -766,9 +778,10 @@ def _download_files(
 ) -> str:
     """Download one or more GGUF files for a model.
 
-    Downloads into the native HF hub cache layout (blobs + snapshot symlinks)
-    so that llama-server can find them via ``--hf-repo`` without any extra
-    configuration.
+    Replicates the native llama.cpp / HF hub download behaviour:
+      1. Download to ``blobs/{oid}.downloadInProgress``
+      2. Rename to ``blobs/{oid}`` on completion
+      3. Symlink ``snapshots/{sha}/filename.gguf`` → ``../../blobs/{oid}``
 
     Returns the first shard's filename.
     """
@@ -786,7 +799,6 @@ def _download_files(
         with httpx.Client(timeout=15, follow_redirects=True) as client:
             commit_sha = _get_repo_commit(client, repo_id)
     except (httpx.HTTPError, KeyError):
-        import hashlib
         commit_sha = hashlib.sha1(repo_id.encode()).hexdigest()
     _, snapshot_dir, blobs_dir = _setup_hf_hub_entry(
         org, repo_name, commit_sha,
@@ -796,26 +808,26 @@ def _download_files(
     for f in file_list:
         filename = f["path"]
         size = _file_size(f)
+        oid = _file_oid(f)
 
         link = snapshot_dir / filename
         link.parent.mkdir(parents=True, exist_ok=True)
 
-        # If snapshot symlink already points to a valid blob, skip
-        if link.is_symlink() and link.exists():
-            blob = link.resolve()
-            if blob.stat().st_size >= size > 0:
-                console.print(
-                    f"File already cached: {filename}", style="yellow"
-                )
-                continue
+        # Derive blob name: prefer LFS OID, fall back to filename hash
+        if not oid:
+            oid = hashlib.sha256(filename.encode()).hexdigest()
+        blob_path = blobs_dir / oid
 
-        # Check if there's an existing blob we can reuse (e.g. migrated
-        # by llama-server from flat cache, or a previous partial)
-        existing_blob = _find_existing_blob(
-            blobs_dir, link, filename, size,
-        )
-        if existing_blob is not None:
-            _ensure_snapshot_link(link, existing_blob, blobs_dir)
+        # Relative path from link's parent to blobs dir (handles subdirs)
+        rel_to_blobs = Path(os.path.relpath(blobs_dir, link.parent))
+
+        # Already complete: blob exists with correct size and symlink is valid
+        if blob_path.exists() and blob_path.stat().st_size >= size > 0:
+            if not (link.is_symlink() and link.exists()):
+                # Blob is fine but symlink is missing — create it
+                if link.exists() or link.is_symlink():
+                    link.unlink()
+                link.symlink_to(rel_to_blobs / blob_path.name)
             console.print(
                 f"File already cached: {filename}", style="yellow"
             )
@@ -823,6 +835,8 @@ def _download_files(
 
         # Need to download
         all_cached = False
+        wip = blobs_dir / f"{oid}.downloadInProgress"
+
         if shard_files:
             shard_idx = file_list.index(f) + 1
             console.print(
@@ -830,79 +844,24 @@ def _download_files(
                 f" ({_human_size(size)})…"
             )
         else:
-            action = "Resuming" if link.exists() else "Downloading"
+            action = "Resuming" if wip.exists() else "Downloading"
             console.print(
                 f"{action} [bold]{model_id}[/bold]"
                 f" ({_human_size(total_size)})…"
             )
 
-        # Download to a temp file in blobs, then rename to etag hash
-        tmp_blob = blobs_dir / f".tmp-{filename.replace('/', '_')}"
-        etag = _download_gguf(repo_id, filename, tmp_blob, size)
-        if etag:
-            blob_path = blobs_dir / etag
-            tmp_blob.rename(blob_path)
-        else:
-            # No etag — use SHA-1 of content as fallback blob name
-            import hashlib
-            h = hashlib.sha1(tmp_blob.read_bytes()).hexdigest()
-            blob_path = blobs_dir / h
-            tmp_blob.rename(blob_path)
+        _download_gguf(repo_id, filename, wip, size)
+        wip.rename(blob_path)
 
-        _ensure_snapshot_link(link, blob_path, blobs_dir)
+        # Create symlink: snapshots/{sha}/[subdir/]file.gguf → blobs/{oid}
+        if link.exists() or link.is_symlink():
+            link.unlink()
+        link.symlink_to(rel_to_blobs / blob_path.name)
 
     if all_cached and shard_files:
         console.print("All parts already cached.", style="yellow")
 
     return first_filename
-
-
-def _find_existing_blob(
-    blobs_dir: Path, link: Path, filename: str, size: int,
-) -> Path | None:
-    """Check if a complete blob already exists for this file.
-
-    Checks: (1) existing non-symlink file at the snapshot path,
-    (2) any blob that the snapshot symlink points to.
-    """
-    # Real file at snapshot path (not a symlink) — e.g. from old llb download
-    if link.exists() and not link.is_symlink():
-        if link.stat().st_size >= size > 0:
-            return link
-    return None
-
-
-def _ensure_snapshot_link(link: Path, blob: Path, blobs_dir: Path) -> None:
-    """Ensure the snapshot entry is a symlink to the blob.
-
-    If blob is outside blobs_dir (e.g. a real file at the snapshot path from
-    an old download), move it into blobs first.
-    """
-    try:
-        blob_resolved = blob.resolve()
-        blobs_resolved = blobs_dir.resolve()
-        in_blobs = str(blob_resolved).startswith(str(blobs_resolved) + "/")
-    except OSError:
-        in_blobs = False
-
-    if not in_blobs:
-        # Move the file into blobs (e.g. old direct-download in snapshots)
-        import hashlib
-        content_hash = hashlib.sha1(blob.read_bytes()).hexdigest()
-        new_blob = blobs_dir / content_hash
-        if not new_blob.exists():
-            blob.rename(new_blob)
-        else:
-            blob.unlink()
-        blob = new_blob
-
-    # Create relative symlink: snapshots/{sha}/file.gguf -> ../../blobs/{hash}
-    rel = Path("../../blobs") / blob.name
-    if link.is_symlink():
-        link.unlink()
-    elif link.exists():
-        link.unlink()
-    link.symlink_to(rel)
 
 
 # GGUF general.sampling.* → llama-server INI key mapping
@@ -977,29 +936,29 @@ def download(model_id: str | None = None, alias: str | None = None) -> None:
             )
             result = picker.value
             if isinstance(result, dict):
-                # Resuming a partial download
+                # Resuming a partial download — re-fetch file list
+                # from HF to get proper paths, sizes, and shard info
                 repo_id = result["repo_id"]
                 quant = result["quant"]
                 model_id = result["model_id"]
-                if "shard_files" in result:
-                    # Multi-shard: re-fetch file list from HF
-                    console.print(
-                        f"Fetching files for [bold]{repo_id}[/bold]…"
-                    )
-                    files = _get_repo_files(repo_id)
-                    q_lower = quant.lower()
-                    matches = [
-                        f for f in files if q_lower in f["path"].lower()
-                    ]
-                    chosen = matches[0] if matches else {
-                        "path": result["filename"],
-                        "size": result["size"],
-                    }
+                console.print(
+                    f"Fetching files for [bold]{repo_id}[/bold]…"
+                )
+                files = _get_repo_files(repo_id)
+                q_lower = quant.lower()
+                matches = [
+                    f for f in files if q_lower in f["path"].lower()
+                ]
+                if matches:
+                    chosen = matches[0]
+                    quant = _extract_quant(chosen["path"])
+                    model_id = f"{repo_id}:{quant}"
                 else:
-                    chosen = {
-                        "path": result["filename"],
-                        "size": result["size"],
-                    }
+                    console.print(
+                        f"Could not find '{quant}' in {repo_id}.",
+                        style="red",
+                    )
+                    raise SystemExit(1)
                 break
 
             repo_id = result

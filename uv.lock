@@ -221,7 +221,7 @@ wheels = [
 
 [[package]]
 name = "llama-buddy"
-version = "0.1.7"
+version = "0.1.9"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
