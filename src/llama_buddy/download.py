@@ -837,6 +837,12 @@ def _download_files(
         all_cached = False
         wip = blobs_dir / f"{oid}.downloadInProgress"
 
+        # Create symlink early so partial downloads are discoverable
+        # (broken symlink until blob is complete, but is_symlink() still
+        # returns True — lets _find_partial_downloads extract the quant)
+        if not (link.is_symlink() or link.exists()):
+            link.symlink_to(rel_to_blobs / blob_path.name)
+
         if shard_files:
             shard_idx = file_list.index(f) + 1
             console.print(
@@ -852,11 +858,6 @@ def _download_files(
 
         _download_gguf(repo_id, filename, wip, size)
         wip.rename(blob_path)
-
-        # Create symlink: snapshots/{sha}/[subdir/]file.gguf → blobs/{oid}
-        if link.exists() or link.is_symlink():
-            link.unlink()
-        link.symlink_to(rel_to_blobs / blob_path.name)
 
     if all_cached and shard_files:
         console.print("All parts already cached.", style="yellow")
