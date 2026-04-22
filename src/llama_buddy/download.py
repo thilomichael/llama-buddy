@@ -216,8 +216,10 @@ def _find_partial_downloads() -> list[dict]:
         org, repo = parts[1], parts[2]
 
         for wip in blobs_dir.glob("*.downloadInProgress"):
-            # OID is the filename minus the suffix — we can't recover
-            # the original GGUF filename from it, so use the repo name
+            blob = blobs_dir / wip.name.removesuffix(".downloadInProgress")
+            if blob.exists():
+                continue
+
             quant = "unknown"
             display_name = f"{org}/{repo}"
             model_id = f"{org}/{repo}"
@@ -861,6 +863,9 @@ def _download_files(
 
     if all_cached and shard_files:
         console.print("All parts already cached.", style="yellow")
+
+    for stale in blobs_dir.glob("*.downloadInProgress"):
+        stale.unlink()
 
     return first_filename
 

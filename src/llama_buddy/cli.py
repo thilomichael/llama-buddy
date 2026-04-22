@@ -19,13 +19,24 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
 
     # start
-    sub.add_parser("start", help="Start llama-server in the background")
+    sub.add_parser(
+        "start",
+        help="Start llama-server in the background",
+        description="Extra flags after -- are forwarded to llama-server "
+        "(e.g. llb start -- --host 0.0.0.0 --port 9090). "
+        "These persist across automatic restarts until the server is stopped.",
+    )
 
     # stop
     sub.add_parser("stop", help="Stop the running llama-server")
 
     # restart
-    sub.add_parser("restart", help="Restart the llama-server")
+    sub.add_parser(
+        "restart",
+        help="Restart the llama-server",
+        description="Extra flags after -- are forwarded to llama-server. "
+        "Without extra flags, the previous start's flags are preserved.",
+    )
 
     # status
     sub.add_parser("status", help="Show server status")

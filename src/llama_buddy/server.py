@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import signal
@@ -21,6 +22,26 @@ from llama_buddy.config import (
 from llama_buddy.console import console
 
 WATCHDOG_PID_FILE = CONFIG_DIR / "watchdog.pid"
+EXTRA_ARGS_FILE = CONFIG_DIR / "extra_args.json"
+
+
+def _save_extra_args(extra_args: list[str] | None) -> None:
+    ensure_config_dir()
+    if extra_args:
+        EXTRA_ARGS_FILE.write_text(json.dumps(extra_args))
+    else:
+        EXTRA_ARGS_FILE.unlink(missing_ok=True)
+
+
+def _load_extra_args() -> list[str] | None:
+    if EXTRA_ARGS_FILE.exists():
+        try:
+            args = json.loads(EXTRA_ARGS_FILE.read_text())
+            if isinstance(args, list):
+                return args
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return None
 
 
 def is_process_running(pid: int) -> bool:
@@ -143,6 +164,7 @@ def start(extra_args: list[str] | None = None) -> None:
     settings = load_settings()
     ensure_config_dir()
     _build_effective_preset(settings.ctx_size)
+    _save_extra_args(extra_args)
 
     log_fh = open(LOG_FILE, "a")
 
@@ -193,10 +215,13 @@ def stop() -> None:
 
     remove_pid()
     EFFECTIVE_PRESET_FILE.unlink(missing_ok=True)
+    EXTRA_ARGS_FILE.unlink(missing_ok=True)
     console.print("llama-server stopped.", style="green")
 
 
 def restart(extra_args: list[str] | None = None) -> None:
+    if extra_args is None:
+        extra_args = _load_extra_args()
     stop()
     start(extra_args)
 
