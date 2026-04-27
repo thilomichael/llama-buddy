@@ -114,6 +114,7 @@ def main(argv: list[str] | None = None) -> None:
 def _run(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args, remaining = parser.parse_known_args(argv)
+    remaining = [a for a in remaining if a != "--"]
 
     if args.command is None:
         parser.print_help()
