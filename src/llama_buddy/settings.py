@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass, fields
 from rich.live import Live
 from rich.text import Text
 
+from llama_buddy.capabilities import filter_supported, has_flag, has_value
 from llama_buddy.config import CONFIG_DIR, ensure_config_dir, read_preset, write_preset
 from llama_buddy.console import console
 from llama_buddy.tui import read_key, require_tty
@@ -24,12 +25,25 @@ class Settings:
     flash_attention: str = "auto"
     ctx_size: int = 8192
     gpu_layers: str = "auto"
+    load_mode: str = "auto"
+    lazy_mode: str = "auto"
+    kv_unified_per_slot: int = 0
 
     def to_server_args(self) -> list[str]:
-        """Convert settings to llama-server CLI arguments."""
+        """Convert settings to llama-server CLI arguments.
+
+        Flags the installed llama-server does not know are left out, and so
+        are values it does not accept: build 10344 has no ``--load-mode
+        auto``. llama-server refuses to start on either, so emitting one
+        would take the whole server down rather than degrade a single
+        setting. Dropping the flag leaves llama-server's own default.
+        """
         args: list[str] = []
         args.extend(["--port", str(self.port)])
-        args.extend(["--sleep-idle-seconds", str(self.idle_timeout)])
+        # llama-server rejects 0 here: -1 disables sleeping, and any value
+        # above 0 is the idle timeout in seconds.
+        sleep_seconds = self.idle_timeout if self.idle_timeout > 0 else -1
+        args.extend(["--sleep-idle-seconds", str(sleep_seconds)])
         if self.jinja:
             args.append("--jinja")
         else:
@@ -38,6 +52,14 @@ class Settings:
         if self.ctx_size > 0:
             args.extend(["--ctx-size", str(self.ctx_size)])
         args.extend(["--gpu-layers", self.gpu_layers])
+        if has_flag("--load-mode") and has_value("--load-mode", self.load_mode):
+            args.extend(["--load-mode", self.load_mode])
+        if has_flag("--lazy-mode") and has_value("--lazy-mode", self.lazy_mode):
+            args.extend(["--lazy-mode", self.lazy_mode])
+        if self.kv_unified_per_slot > 0 and has_flag("--kv-unified-per-slot"):
+            args.extend(
+                ["--kv-unified-per-slot", str(self.kv_unified_per_slot)]
+            )
         return args
 
 
@@ -50,7 +72,7 @@ SETTING_META: dict[str, dict] = {
     },
     "idle_timeout": {
         "label": "Idle Timeout",
-        "description": "Seconds before unloading idle models (0 = never)",
+        "description": "Seconds before an idle model sleeps (-1 = never)",
         "type": "int",
     },
     "jinja": {
@@ -74,6 +96,26 @@ SETTING_META: dict[str, dict] = {
         "description": "Layers to offload to GPU",
         "type": "choice",
         "choices": ["auto", "all", "none"],
+    },
+    "load_mode": {
+        "label": "Load Mode",
+        "description": "How model weights are read (replaces mmap/mlock)",
+        "type": "choice",
+        "choices": ["auto", "none", "mmap", "mlock", "mmap+mlock", "dio"],
+        "flag": "--load-mode",
+    },
+    "lazy_mode": {
+        "label": "Lazy Mode",
+        "description": "Read large tensors on demand instead of resident",
+        "type": "choice",
+        "choices": ["auto", "on", "off"],
+        "flag": "--lazy-mode",
+    },
+    "kv_unified_per_slot": {
+        "label": "KV Per Slot",
+        "description": "Context limit per parallel slot (0 = unset)",
+        "type": "int",
+        "flag": "--kv-unified-per-slot",
     },
 }
 
@@ -105,6 +147,35 @@ MODEL_SETTING_META: dict[str, dict] = {
         "choices": ["auto", "on", "off"],
         "default": "auto",
     },
+    "spec-type": {
+        "label": "Speculative Decoding",
+        "description": "draft-mtp uses the model's own multi-token head",
+        "type": "choice",
+        "choices": ["", "draft-mtp", "none"],
+        "default": "",
+        "flag": "--spec-type",
+    },
+    "spec-draft-n-max": {
+        "label": "Draft Tokens",
+        "description": "Tokens to draft per step when speculating",
+        "type": "int",
+        "default": "3",
+        "flag": "--spec-draft-n-max",
+    },
+    "ncmoe": {
+        "label": "CPU MoE Layers",
+        "description": "Keep MoE expert weights of the first N layers on CPU",
+        "type": "int",
+        "default": "0",
+        "flag": "--n-cpu-moe",
+    },
+    "ncffn": {
+        "label": "CPU FFN Layers",
+        "description": "Keep dense FFN weights of the first N layers on CPU",
+        "type": "int",
+        "default": "0",
+        "flag": "--n-cpu-ffn",
+    },
 }
 
 
@@ -113,7 +184,12 @@ def load_settings() -> Settings:
         try:
             data = json.loads(SETTINGS_FILE.read_text())
             known = {f.name for f in fields(Settings)}
-            return Settings(**{k: v for k, v in data.items() if k in known})
+            settings = Settings(**{k: v for k, v in data.items() if k in known})
+            # Earlier versions documented 0 as "never sleep" and wrote it
+            # through to llama-server, which refuses to start on it.
+            if settings.idle_timeout == 0:
+                settings.idle_timeout = -1
+            return settings
         except (json.JSONDecodeError, TypeError):
             pass
     return Settings()
@@ -350,7 +426,7 @@ def edit_settings() -> None:
 
     _run_kv_editor(
         title="Settings",
-        meta_map=SETTING_META,
+        meta_map=filter_supported(SETTING_META),
         get_value=get_value,
         set_value=set_value,
         on_save=on_save,
@@ -374,7 +450,7 @@ def _edit_model_settings() -> None:
 
 def _build_model_meta(model_id: str, preset) -> dict[str, dict]:
     """Build meta map for a model, including any custom keys from the INI."""
-    meta = dict(MODEL_SETTING_META)
+    meta = filter_supported(MODEL_SETTING_META)
     # Add any existing keys not in the standard set
     if preset.has_section(model_id):
         for key in preset.options(model_id):

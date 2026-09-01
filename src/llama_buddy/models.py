@@ -2,20 +2,30 @@
 
 from __future__ import annotations
 
+import json
+import struct
 from functools import lru_cache
+from pathlib import Path
 
 import httpx
 from rich.table import Table
 
 from llama_buddy.config import (
+    CONFIG_DIR,
     DEFAULT_PORT,
+    ensure_config_dir,
     find_model_gguf_files,
     get_gguf_model_groups,
     get_hf_hub_dir,
     update_vram_usage,
 )
 from llama_buddy.console import console
-from llama_buddy.gguf import read_metadata
+from llama_buddy.gguf import (
+    has_tensor,
+    mtp_tensor_name,
+    read_metadata,
+    read_scalar_metadata,
+)
 
 
 def get_models(port: int = DEFAULT_PORT) -> list[dict]:
@@ -113,6 +123,97 @@ def get_model_name(model_id: str) -> str:
     return get_model_meta(model_id).get("name", "")
 
 
+MTP_CACHE_FILE = CONFIG_DIR / "mtp.json"
+
+_mtp_cache: dict[str, dict] | None = None
+
+
+def _mtp_signature(files: list[Path]) -> str:
+    """Identify a model's files, so a re-download invalidates the cache."""
+    return "|".join(f"{f.name}:{f.stat().st_size}" for f in files)
+
+
+def _read_mtp_cache() -> dict[str, dict]:
+    global _mtp_cache
+    if _mtp_cache is None:
+        try:
+            loaded = json.loads(MTP_CACHE_FILE.read_text())
+            _mtp_cache = loaded if isinstance(loaded, dict) else {}
+        except (OSError, json.JSONDecodeError):
+            _mtp_cache = {}
+    return _mtp_cache
+
+
+def _write_mtp_cache(cache: dict[str, dict]) -> None:
+    try:
+        ensure_config_dir()
+        MTP_CACHE_FILE.write_text(json.dumps(cache, indent=2) + "\n")
+    except OSError:
+        pass
+
+
+def _detect_mtp(files: list[Path]) -> bool:
+    """Look for the MTP head across a model's GGUF files.
+
+    Sharded models keep the block count in the first shard and may carry
+    the head in a later one, so the name is resolved once and looked for
+    in every shard.
+    """
+    try:
+        target = mtp_tensor_name(read_scalar_metadata(files[0]))
+        if target is None:
+            return False
+        return any(has_tensor(f, target) for f in files)
+    except (ValueError, OSError, struct.error):
+        return False
+
+
+@lru_cache(maxsize=64)
+def model_has_mtp(model_id: str) -> bool:
+    """Check whether a model ships a multi-token-prediction head.
+
+    llama-server only uses the head when told to via ``--spec-type
+    draft-mtp``; without the flag it loads the tensors and ignores them.
+    The head survives into some quants of a repo and not others, so this
+    reads the actual files rather than trusting the repo name.
+
+    Scanning a model costs ~100ms, which is too much to repeat on every
+    ``llb models``, so results are cached against the files they came from.
+    """
+    files = find_model_gguf_files(model_id)
+    if not files:
+        return False
+
+    try:
+        signature = _mtp_signature(files)
+    except OSError:
+        return False
+
+    cache = _read_mtp_cache()
+    entry = cache.get(model_id)
+    if isinstance(entry, dict) and entry.get("signature") == signature:
+        return bool(entry.get("mtp"))
+
+    result = _detect_mtp(files)
+    cache[model_id] = {"signature": signature, "mtp": result}
+    _write_mtp_cache(cache)
+    return result
+
+
+def sync_mtp_param(model_id: str, preset) -> bool:
+    """Enable MTP for a model that ships the head, if not already configured.
+
+    Returns True when the preset was changed. An existing ``spec-type``
+    is left alone, so turning MTP off in the settings editor sticks.
+    """
+    if preset.has_option(model_id, "spec-type"):
+        return False
+    if not model_has_mtp(model_id):
+        return False
+    preset.set(model_id, "spec-type", "draft-mtp")
+    return True
+
+
 def _group_sort_key(
     group: list[str],
     sizes: dict[str, int],
@@ -127,6 +228,19 @@ def _group_sort_key(
     # Default: sort by model name (from metadata), then model ID
     name = meta_cache.get(first, {}).get("name", first).lower()
     return (name,)
+
+
+# Router model states, as reported by GET /models. A child that has gone to
+# sleep after --sleep-idle-seconds reports "sleeping": it is still running and
+# answers /props, but has released its weights.
+_STATUS_STYLES = {
+    "loaded": "[green]loaded[/green]",
+    "sleeping": "[cyan]sleeping[/cyan]",
+    "loading": "[yellow]loading[/yellow]",
+    "downloading": "[yellow]downloading[/yellow]",
+    "downloaded": "[dim]downloaded[/dim]",
+    "unloaded": "[dim]unloaded[/dim]",
+}
 
 
 def _format_mib(mib: float) -> str:
@@ -173,6 +287,20 @@ def _effective_ctx(
         native_paren = f"({native_fmt})".ljust(pad + 2)
         return f"{eff_str} [dim]{native_paren}[/dim]"
     return native_fmt
+
+
+def _mtp_cell(model_id: str, preset) -> str:
+    """Render the MTP column: whether the head exists and whether it is used."""
+    if not model_has_mtp(model_id):
+        return "[dim]-[/dim]"
+    spec = (
+        preset.get(model_id, "spec-type", fallback="")
+        if preset.has_section(model_id)
+        else ""
+    )
+    if "draft-mtp" in spec:
+        return "[green]on[/green]"
+    return "[dim]off[/dim]"
 
 
 def list_models(port: int = DEFAULT_PORT, sort: str = "name") -> None:
@@ -238,6 +366,7 @@ def list_models(port: int = DEFAULT_PORT, sort: str = "name") -> None:
     table.add_column("Name", style="bold")
     table.add_column("Alias", style="dim")
     table.add_column("Status")
+    table.add_column("MTP")
     table.add_column("Context", justify="right")
     table.add_column("Size", justify="right")
     table.add_column("VRAM", justify="right")
@@ -255,8 +384,8 @@ def list_models(port: int = DEFAULT_PORT, sort: str = "name") -> None:
         alias = aliases[0] if aliases else ""
         model_status = m.get("status", {})
         status_val = model_status.get("value", "") if isinstance(model_status, dict) else ""
-        is_loaded = status_val == "loaded"
-        status_str = "[green]loaded[/green]" if is_loaded else "[dim]unloaded[/dim]"
+        status_str = _STATUS_STYLES.get(status_val, "[dim]unloaded[/dim]")
+        mtp_str = _mtp_cell(model_id, preset)
         base_repo = model_id.split(":")[0]
         size = sizes.get(base_repo, 0)
         size_str = format_size(size) if size else "-"
@@ -264,7 +393,7 @@ def list_models(port: int = DEFAULT_PORT, sort: str = "name") -> None:
         vram_str = _format_mib(vram_mib) if vram_mib else "-"
         display_name = f"{prefix}{name}" if prefix else name
         table.add_row(
-            display_name, alias, status_str, ctx_str,
+            display_name, alias, status_str, mtp_str, ctx_str,
             size_str, vram_str, model_id,
         )
 
@@ -288,7 +417,7 @@ def list_models(port: int = DEFAULT_PORT, sort: str = "name") -> None:
             size_str = format_size(size) if size else "-"
             table.add_row(
                 f"[bold]{shared_name}[/bold]",
-                "", "", "", size_str, "", "",
+                "", "", "", "", size_str, "", "",
             )
             for i, mid in enumerate(present):
                 is_last = i == len(present) - 1

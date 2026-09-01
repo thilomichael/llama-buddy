@@ -82,3 +82,19 @@ def test_format_mib_gigabytes():
 
 def test_format_mib_megabytes():
     assert _format_mib(512.0) == "512M"
+
+
+def test_status_styles_cover_every_router_state():
+    """server_model_status in llama.cpp has six values; all must render."""
+    from llama_buddy.models import _STATUS_STYLES
+
+    assert set(_STATUS_STYLES) == {
+        "downloading", "downloaded", "unloaded", "loading", "loaded", "sleeping",
+    }
+
+
+def test_sleeping_counts_as_running():
+    """A slept child still answers /props, so llb props must offer it."""
+    from llama_buddy.props import RUNNING_STATES
+
+    assert RUNNING_STATES == {"loaded", "sleeping"}

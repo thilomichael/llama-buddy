@@ -1016,6 +1016,15 @@ def download(model_id: str | None = None, alias: str | None = None) -> None:
     # Sync GGUF sampling params into preset (only for keys not already set)
     _sync_sampling_params(model_id, preset)
 
+    from llama_buddy.models import sync_mtp_param
+
+    if sync_mtp_param(model_id, preset):
+        console.print(
+            "Model ships a multi-token-prediction head — enabled MTP "
+            "speculative decoding.",
+            style="dim",
+        )
+
     write_preset(preset)
 
     if is_new:

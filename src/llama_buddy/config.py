@@ -17,6 +17,7 @@ PRESET_FILE = CONFIG_DIR / "models.ini"
 PID_FILE = CONFIG_DIR / "server.pid"
 LOG_FILE = CONFIG_DIR / "server.log"
 VRAM_FILE = CONFIG_DIR / "vram.json"
+MTP_BACKFILL_FILE = CONFIG_DIR / "mtp_backfill_done"
 
 DEFAULT_PORT = 8080
 
@@ -214,12 +215,17 @@ def sync_preset_with_cache() -> list[str]:
     changed = False
     added: list[str] = []
 
-    # Add models found in HF hub cache that are missing from the preset
+    # Add models found in HF hub cache that are missing from the preset.
+    # MTP detection reads the GGUF tensor block, so it only runs for models
+    # being added rather than on every command.
+    from llama_buddy.models import sync_mtp_param
+
     for model_id in sorted(discovered_ids):
         if model_id.lower() not in sections:
             preset.add_section(model_id)
             sections[model_id.lower()] = model_id
             added.append(model_id)
+            sync_mtp_param(model_id, preset)
             changed = True
 
     # Remove orphaned preset entries (no GGUF files on disk)
@@ -233,10 +239,37 @@ def sync_preset_with_cache() -> list[str]:
         preset.remove_section(section)
         changed = True
 
+    if _backfill_mtp(preset):
+        changed = True
+
     if changed:
         write_preset(preset)
 
     return added
+
+
+def _backfill_mtp(preset) -> bool:
+    """Enable MTP for models that were added before llb detected the head.
+
+    Scanning every model costs a couple of seconds, and models added from
+    here on are checked as they arrive, so this runs once and leaves a
+    marker. Returns True when the preset was changed.
+    """
+    if MTP_BACKFILL_FILE.exists():
+        return False
+
+    from llama_buddy.models import sync_mtp_param
+
+    changed = False
+    for section in preset.sections():
+        if section == "*":
+            continue
+        if sync_mtp_param(section, preset):
+            changed = True
+
+    ensure_config_dir()
+    MTP_BACKFILL_FILE.touch()
+    return changed
 
 
 def get_model_groups() -> dict[str, list[str]]:

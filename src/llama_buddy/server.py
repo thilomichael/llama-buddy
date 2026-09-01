@@ -7,7 +7,6 @@ import os
 import shutil
 import signal
 import subprocess
-import sys
 import time
 
 from llama_buddy.config import (
@@ -56,31 +55,13 @@ def find_server_binary() -> str | None:
     return shutil.which("llama-server")
 
 
-def _start_watchdog(settings) -> None:
-    """Spawn the idle-model watchdog as a background process."""
-    if settings.idle_timeout <= 0:
-        return
+def _remove_stale_watchdog() -> None:
+    """Kill a watchdog process left over from a version that still spawned one.
 
-    _stop_watchdog()
-
-    poll_interval = max(30, settings.idle_timeout // 10)
-    log_fh = open(LOG_FILE, "a")
-    proc = subprocess.Popen(
-        [
-            sys.executable, "-m", "llama_buddy.watchdog",
-            str(settings.port), str(poll_interval),
-        ],
-        stdout=log_fh,
-        stderr=subprocess.STDOUT,
-        start_new_session=True,
-    )
-    log_fh.close()
-    ensure_config_dir()
-    WATCHDOG_PID_FILE.write_text(str(proc.pid))
-
-
-def _stop_watchdog() -> None:
-    """Stop the idle-model watchdog if running."""
+    Releases from before 0.1.14 ran ``llama_buddy.watchdog`` alongside the
+    server. Sleeping already frees the model weights, so the watchdog is gone;
+    this stops one that an older ``llb start`` left behind.
+    """
     if not WATCHDOG_PID_FILE.exists():
         return
     text = WATCHDOG_PID_FILE.read_text().strip()
@@ -163,6 +144,7 @@ def start(extra_args: list[str] | None = None) -> None:
 
     settings = load_settings()
     ensure_config_dir()
+    _remove_stale_watchdog()
     _build_effective_preset(settings.ctx_size)
     _save_extra_args(extra_args)
 
@@ -185,11 +167,9 @@ def start(extra_args: list[str] | None = None) -> None:
         f"llama-server started [dim](PID {proc.pid})[/dim].", style="green"
     )
 
-    _start_watchdog(settings)
-
 
 def stop() -> None:
-    _stop_watchdog()
+    _remove_stale_watchdog()
 
     pid = read_pid()
     if pid is None:

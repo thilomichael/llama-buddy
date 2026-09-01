@@ -67,3 +67,58 @@ def test_to_server_args_default_ctx():
     args = s.to_server_args()
     assert "--ctx-size" in args
     assert "8192" in args
+
+
+def test_idle_timeout_zero_is_migrated(tmp_path, monkeypatch):
+    """llama-server refuses to start on --sleep-idle-seconds 0."""
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(json.dumps({"idle_timeout": 0}))
+    monkeypatch.setattr("llama_buddy.settings.SETTINGS_FILE", settings_file)
+
+    loaded = load_settings()
+    assert loaded.idle_timeout == -1
+
+
+def test_never_sleep_passes_minus_one():
+    args = Settings(idle_timeout=-1).to_server_args()
+    assert args[args.index("--sleep-idle-seconds") + 1] == "-1"
+
+
+def _allow(monkeypatch, flags=True, values=True):
+    monkeypatch.setattr(
+        "llama_buddy.settings.has_flag",
+        flags if callable(flags) else (lambda flag: flags),
+    )
+    monkeypatch.setattr(
+        "llama_buddy.settings.has_value",
+        values if callable(values) else (lambda flag, value: values),
+    )
+
+
+def test_unsupported_flags_are_left_out(monkeypatch):
+    _allow(monkeypatch, flags=lambda flag: flag == "--load-mode")
+    args = Settings(kv_unified_per_slot=4096).to_server_args()
+    assert "--load-mode" in args
+    assert "--lazy-mode" not in args
+    assert "--kv-unified-per-slot" not in args
+
+
+def test_unsupported_value_is_left_out(monkeypatch):
+    """Build 10344 has --load-mode but rejects 'auto'; the build default wins."""
+    _allow(monkeypatch, values=lambda flag, value: value != "auto")
+    args = Settings(load_mode="auto", lazy_mode="off").to_server_args()
+    assert "--load-mode" not in args
+    assert args[args.index("--lazy-mode") + 1] == "off"
+
+
+def test_supported_flags_are_emitted(monkeypatch):
+    _allow(monkeypatch)
+    args = Settings(kv_unified_per_slot=4096).to_server_args()
+    assert args[args.index("--load-mode") + 1] == "auto"
+    assert args[args.index("--lazy-mode") + 1] == "auto"
+    assert args[args.index("--kv-unified-per-slot") + 1] == "4096"
+
+
+def test_kv_unified_per_slot_unset_is_omitted(monkeypatch):
+    _allow(monkeypatch)
+    assert "--kv-unified-per-slot" not in Settings().to_server_args()

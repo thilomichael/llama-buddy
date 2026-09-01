@@ -48,8 +48,14 @@ def _fmt(value: object) -> str:
     return str(value)
 
 
+# A child that has slept after --sleep-idle-seconds reports "sleeping" rather
+# than "loaded". It is still running and still answers /props, so it belongs
+# in the selector.
+RUNNING_STATES = {"loaded", "sleeping"}
+
+
 def get_loaded_model_ids(port: int) -> set[str]:
-    """Query /models and return IDs of models with status 'loaded'."""
+    """Query /models and return IDs of models whose child server is running."""
     try:
         with httpx.Client(timeout=5) as client:
             resp = client.get(f"http://localhost:{port}/models")
@@ -61,7 +67,7 @@ def get_loaded_model_ids(port: int) -> set[str]:
         m["id"]
         for m in data
         if isinstance(m.get("status"), dict)
-        and m["status"].get("value") == "loaded"
+        and m["status"].get("value") in RUNNING_STATES
     }
 
 

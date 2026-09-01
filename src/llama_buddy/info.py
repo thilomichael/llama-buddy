@@ -14,7 +14,7 @@ from llama_buddy.config import (
     write_preset,
 )
 from llama_buddy.console import console
-from llama_buddy.gguf import read_metadata
+from llama_buddy.gguf import has_tensor, mtp_tensor_name, read_metadata
 from llama_buddy.models import format_size
 
 
@@ -156,6 +156,21 @@ def show_info(model_id_or_path: str) -> None:
     ctx_key = f"{arch}.context_length"
     if ctx_key in meta:
         general.add_row("Context Length", f"{meta[ctx_key]:,}")
+
+    target = mtp_tensor_name(meta)
+    if target is not None and any(has_tensor(f, target) for f in gguf_files):
+        model_id = resolve_model(model_id_or_path)
+        preset = read_preset()
+        enabled = (
+            model_id is not None
+            and preset.has_section(model_id)
+            and "draft-mtp" in preset.get(model_id, "spec-type", fallback="")
+        )
+        state = (
+            "[green]enabled[/green]" if enabled
+            else "[yellow]available, not enabled[/yellow]"
+        )
+        general.add_row("Multi-Token Prediction", state)
 
     # Sampling table
     sampling = Table(show_header=False, box=None, padding=(0, 2))

@@ -25,7 +25,8 @@ Think of it as an ollama-like experience built on top of `llama-server`.
 - **Server props** &mdash; inspect active sampling parameters on loaded models
 - **Sampling sync** &mdash; automatically applies GGUF-recommended sampling params to your preset
 - **Per-model settings** &mdash; context size, GPU layers, flash attention, and more
-- **Idle model unloading** &mdash; background watchdog automatically unloads models after configurable idle timeout
+- **Multi-token prediction** &mdash; models that ship an MTP head get speculative decoding switched on by themselves
+- **Idle sleeping** &mdash; `llama-server` releases the weights of a model after a configurable idle timeout
 - **VRAM tracking** &mdash; automatically parses server logs to show memory usage per model
 - **Auto-sync** &mdash; preset file stays in sync with the llama.cpp cache automatically
 
