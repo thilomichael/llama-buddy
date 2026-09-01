@@ -10,13 +10,16 @@ from pathlib import Path
 import httpx
 from rich.table import Table
 
+from llama_buddy.capabilities import has_flag
 from llama_buddy.config import (
     CONFIG_DIR,
     DEFAULT_PORT,
     ensure_config_dir,
+    find_model_draft_file,
     find_model_gguf_files,
     get_gguf_model_groups,
     get_hf_hub_dir,
+    is_draft_file,
     update_vram_usage,
 )
 from llama_buddy.console import console
@@ -52,7 +55,7 @@ def compute_model_sizes() -> dict[str, int]:
             if not snapshots.exists():
                 continue
             for f in snapshots.glob("**/*.gguf"):
-                if "mmproj" in f.name:
+                if "mmproj" in f.name or is_draft_file(f.name):
                     continue
                 resolved = str(f.resolve())
                 if resolved not in seen:
@@ -201,16 +204,25 @@ def model_has_mtp(model_id: str) -> bool:
 
 
 def sync_mtp_param(model_id: str, preset) -> bool:
-    """Enable MTP for a model that ships the head, if not already configured.
+    """Enable MTP for a model that has a head, if not already configured.
 
-    Returns True when the preset was changed. An existing ``spec-type``
-    is left alone, so turning MTP off in the settings editor sticks.
+    The head is either inside the model's own GGUF or in a sidecar file
+    downloaded next to it, in which case llama-server needs the path to it.
+    Returns True when the preset was changed. An existing ``spec-type`` is
+    left alone, so turning MTP off in the settings editor sticks.
     """
     if preset.has_option(model_id, "spec-type"):
         return False
-    if not model_has_mtp(model_id):
+
+    if model_has_mtp(model_id):
+        preset.set(model_id, "spec-type", "draft-mtp")
+        return True
+
+    draft = find_model_draft_file(model_id)
+    if draft is None or not has_flag("--spec-draft-model"):
         return False
     preset.set(model_id, "spec-type", "draft-mtp")
+    preset.set(model_id, "spec-draft-model", str(draft))
     return True
 
 
@@ -291,7 +303,7 @@ def _effective_ctx(
 
 def _mtp_cell(model_id: str, preset) -> str:
     """Render the MTP column: whether the head exists and whether it is used."""
-    if not model_has_mtp(model_id):
+    if not model_has_mtp(model_id) and find_model_draft_file(model_id) is None:
         return "[dim]-[/dim]"
     spec = (
         preset.get(model_id, "spec-type", fallback="")
@@ -383,7 +395,11 @@ def list_models(port: int = DEFAULT_PORT, sort: str = "name") -> None:
         aliases = m.get("aliases", [])
         alias = aliases[0] if aliases else ""
         model_status = m.get("status", {})
-        status_val = model_status.get("value", "") if isinstance(model_status, dict) else ""
+        status_val = (
+            model_status.get("value", "")
+            if isinstance(model_status, dict)
+            else ""
+        )
         status_str = _STATUS_STYLES.get(status_val, "[dim]unloaded[/dim]")
         mtp_str = _mtp_cell(model_id, preset)
         base_repo = model_id.split(":")[0]

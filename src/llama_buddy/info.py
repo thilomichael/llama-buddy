@@ -8,6 +8,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from llama_buddy.config import (
+    find_model_draft_file,
     find_model_gguf_files,
     read_preset,
     resolve_model,
@@ -157,9 +158,17 @@ def show_info(model_id_or_path: str) -> None:
     if ctx_key in meta:
         general.add_row("Context Length", f"{meta[ctx_key]:,}")
 
+    # The head is either baked into the model file or cached next to it as
+    # its own GGUF.
     target = mtp_tensor_name(meta)
-    if target is not None and any(has_tensor(f, target) for f in gguf_files):
-        model_id = resolve_model(model_id_or_path)
+    in_file = target is not None and any(
+        has_tensor(f, target) for f in gguf_files
+    )
+    model_id = resolve_model(model_id_or_path)
+    sidecar = (
+        find_model_draft_file(model_id) if model_id is not None else None
+    )
+    if in_file or sidecar is not None:
         preset = read_preset()
         enabled = (
             model_id is not None
@@ -170,6 +179,8 @@ def show_info(model_id_or_path: str) -> None:
             "[green]enabled[/green]" if enabled
             else "[yellow]available, not enabled[/yellow]"
         )
+        if sidecar is not None and not in_file:
+            state += f" [dim]({sidecar.name})[/dim]"
         general.add_row("Multi-Token Prediction", state)
 
     # Sampling table

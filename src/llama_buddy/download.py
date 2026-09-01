@@ -23,9 +23,12 @@ from rich.progress import (
 from rich.text import Text
 
 from llama_buddy.config import (
+    find_model_draft_file,
     find_model_gguf_files,
     get_hf_hub_dir,
     hf_model_dir,
+    is_draft_file,
+    pick_draft_file,
     read_preset,
     resolve_model,
     write_preset,
@@ -101,7 +104,10 @@ def _get_repo_commit(client: httpx.Client, repo_id: str) -> str:
     return resp.json()["sha"]
 
 
-def _get_repo_files(repo_id: str) -> list[dict]:
+_repo_file_cache: dict[str, list[dict]] = {}
+
+
+def _fetch_repo_files(repo_id: str) -> list[dict]:
     """Get GGUF files in a HF repo with sizes (excludes mmproj).
 
     Uses the model info endpoint with ``?blobs=true`` to get all files
@@ -111,7 +117,14 @@ def _get_repo_files(repo_id: str) -> list[dict]:
     into a single entry whose ``"path"`` is the first shard, ``"size"``
     is the total across all shards, and ``"shard_files"`` lists every
     shard dict.
+
+    The result is kept for the life of the process, so asking for the
+    model files and for the sidecars costs one request.
     """
+    cached = _repo_file_cache.get(repo_id)
+    if cached is not None:
+        return cached
+
     with httpx.Client(timeout=15, follow_redirects=True) as client:
         resp = client.get(f"{HF_API}/{repo_id}?blobs=true")
         resp.raise_for_status()
@@ -135,7 +148,28 @@ def _get_repo_files(repo_id: str) -> list[dict]:
                 },
             })
 
-    return _merge_shards(gguf_files)
+    merged = _merge_shards(gguf_files)
+    _repo_file_cache[repo_id] = merged
+    return merged
+
+
+def _get_repo_files(repo_id: str) -> list[dict]:
+    """Get the repo's model GGUFs, without its speculative decoding sidecars.
+
+    A sidecar carries a quant tag of its own, so leaving it in would offer
+    ``mtp-Model-Q8_0.gguf`` next to ``Model-Q8_0.gguf`` as if the 4 GB draft
+    head were a quantisation of the 188 GB model.
+    """
+    return [f for f in _fetch_repo_files(repo_id) if not is_draft_file(f["path"])]
+
+
+def _get_repo_mtp_files(repo_id: str) -> list[dict]:
+    """Get the repo's MTP sidecars."""
+    return [
+        f
+        for f in _fetch_repo_files(repo_id)
+        if f["path"].rsplit("/", 1)[-1].lower().startswith("mtp-")
+    ]
 
 
 _SHARD_RE = re.compile(r"-(\d{5})-of-(\d{5})\.gguf$")
@@ -230,7 +264,7 @@ def _find_partial_downloads() -> list[dict]:
             snapshots = model_dir / "snapshots"
             if snapshots.exists():
                 for gguf in snapshots.glob("**/*.gguf"):
-                    if gguf.is_symlink():
+                    if gguf.is_symlink() and not is_draft_file(gguf.name):
                         quant = _quant_from_stem(gguf.stem)
                         display_name = f"{org}/{repo} ({_extract_quant(gguf.name)})"
                         model_id = (
@@ -870,6 +904,31 @@ def _download_files(
     return first_filename
 
 
+def _download_mtp_sidecar(
+    repo_id: str, quant: str, org: str, repo_name: str, model_id: str,
+) -> Path | None:
+    """Download the MTP sidecar this repo ships for a quant, if it has one.
+
+    Repos that keep the multi-token-prediction head out of the model file
+    ship it as ``mtp-<model>-<quant>.gguf``. llama-server loads it as a
+    draft model, so it has to be in the cache before MTP can be switched on.
+    """
+    try:
+        candidates = _get_repo_mtp_files(repo_id)
+    except httpx.HTTPError:
+        return None
+    if not candidates:
+        return None
+
+    path = pick_draft_file([f["path"] for f in candidates], quant)
+    entry = next(f for f in candidates if f["path"] == path)
+    name = path.rsplit("/", 1)[-1]
+
+    console.print("Repo ships a multi-token-prediction head:")
+    _download_files(repo_id, entry, org, repo_name, name)
+    return find_model_draft_file(model_id)
+
+
 # GGUF general.sampling.* → llama-server INI key mapping
 _SAMPLING_KEY_MAP = {
     "temperature": "temp",
@@ -1001,6 +1060,14 @@ def download(model_id: str | None = None, alias: str | None = None) -> None:
 
     _download_files(repo_id, chosen, org, repo_name, model_id)
 
+    from llama_buddy.models import model_has_mtp, sync_mtp_param
+
+    # A head baked into the model file needs nothing extra; otherwise the
+    # repo may ship one as a separate GGUF that llama-server loads as a
+    # draft model.
+    if not model_has_mtp(model_id):
+        _download_mtp_sidecar(repo_id, quant, org, repo_name, model_id)
+
     # Add to preset (if not already there)
     preset = read_preset()
     is_new = model_id not in preset
@@ -1016,12 +1083,9 @@ def download(model_id: str | None = None, alias: str | None = None) -> None:
     # Sync GGUF sampling params into preset (only for keys not already set)
     _sync_sampling_params(model_id, preset)
 
-    from llama_buddy.models import sync_mtp_param
-
     if sync_mtp_param(model_id, preset):
         console.print(
-            "Model ships a multi-token-prediction head — enabled MTP "
-            "speculative decoding.",
+            "Enabled MTP speculative decoding for this model.",
             style="dim",
         )
 
@@ -1189,7 +1253,12 @@ def _remove_model(section: str, keep_files: bool) -> None:
 
     # Only delete GGUF files if no siblings remain
     if not keep_files and not siblings:
-        for f in find_model_gguf_files(section):
+        doomed = find_model_gguf_files(section)
+        # The MTP sidecar belongs to this quant alone, so it goes with it.
+        draft = find_model_draft_file(section)
+        if draft is not None:
+            doomed.append(draft)
+        for f in doomed:
             # Delete blob (symlink target) and the snapshot symlink
             resolved = f.resolve()
             f.unlink()
@@ -1197,10 +1266,14 @@ def _remove_model(section: str, keep_files: bool) -> None:
                 resolved.unlink()
             console.print(f"Deleted {f.name}", style="dim")
 
-        # Clean up HF hub model dir if no GGUFs remain
+        # Clean up HF hub model dir if no model GGUFs remain. Sidecars left
+        # behind without a model to draft for go too.
         hf_dir = _hf_model_dir_for_id(section)
         if hf_dir.exists():
-            remaining = list(hf_dir.glob("snapshots/**/*.gguf"))
+            remaining = [
+                p for p in hf_dir.glob("snapshots/**/*.gguf")
+                if not is_draft_file(p.name)
+            ]
             if not remaining:
                 shutil.rmtree(hf_dir)
                 console.print(f"Removed {hf_dir.name}", style="dim")
@@ -1255,6 +1328,9 @@ def _confirm_remove(section: str, keep_files: bool) -> bool:
     from llama_buddy.config import get_model_groups
 
     files = find_model_gguf_files(section)
+    draft = find_model_draft_file(section)
+    if draft is not None:
+        files.append(draft)
     total_size = sum(f.stat().st_size for f in files)
     siblings = get_model_groups().get(section, [])
 

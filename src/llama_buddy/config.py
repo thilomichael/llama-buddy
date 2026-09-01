@@ -80,6 +80,52 @@ def _hf_model_dir_for_id(model_id: str) -> Path:
     return hf_model_dir(org, repo)
 
 
+# Speculative decoding sidecars: a draft head shipped as its own GGUF next to
+# the model it drafts for. llama.cpp identifies them by filename prefix, see
+# draft_prefixes in common/preset.cpp.
+_DRAFT_PREFIXES = ("mtp-", "dspark-", "dflash-", "eagle3-")
+
+
+def is_draft_file(name: str) -> bool:
+    """Whether a GGUF path names a speculative decoding sidecar."""
+    return name.rsplit("/", 1)[-1].lower().startswith(_DRAFT_PREFIXES)
+
+
+_QUANT_BITS_RE = re.compile(r"(?:iq|q|bf|f)(\d+)", re.IGNORECASE)
+
+
+def _quant_bits(tag: str) -> int | None:
+    """Bits per weight named by a quant tag: Q4_K_M → 4, BF16 → 16."""
+    m = _QUANT_BITS_RE.search(tag)
+    return int(m.group(1)) if m else None
+
+
+def pick_draft_file(paths: list[str], quant: str) -> str | None:
+    """Choose the sidecar that belongs with a quant.
+
+    Takes the file whose quant tag matches the model's. Repos ship heads for
+    a few quants only, so when none matches it falls back to the closest bit
+    width, the way find_best_sibling in llama.cpp's common/download.cpp does.
+    A ``-shared-`` head loses to a standalone one because it leaves out the
+    weights it expects to take from the model.
+    """
+    if not paths:
+        return None
+    suffix = f"-{quant.lower()}.gguf"
+    want = _quant_bits(quant)
+
+    def rank(path: str) -> tuple:
+        base = path.rsplit("/", 1)[-1].lower()
+        bits = _quant_bits(base.removesuffix(".gguf").rsplit("-", 1)[-1])
+        if want is None or bits is None:
+            distance = 99
+        else:
+            distance = abs(bits - want)
+        return (not base.endswith(suffix), distance, "-shared-" in base, base)
+
+    return min(paths, key=rank)
+
+
 _QUANT_RE = re.compile(r"[-_]((?:IQ|Q|F|BF)\d\w*)$")
 
 
@@ -180,7 +226,7 @@ def _read_manifest_map() -> tuple[dict[str, str], dict[str, list[str]]]:
             if not snapshots.exists():
                 continue
             for gguf in snapshots.glob("**/*.gguf"):
-                if "mmproj" in gguf.name:
+                if "mmproj" in gguf.name or is_draft_file(gguf.name):
                     continue
                 quant = _quant_from_stem(gguf.stem)
                 mid = f"{org}/{repo}:{quant}" if quant != "latest" else f"{org}/{repo}"
@@ -290,8 +336,8 @@ def get_gguf_model_groups() -> list[list[str]]:
     return list(gguf_to_models.values())
 
 
-def find_model_gguf_files(model_id: str) -> list[Path]:
-    """Find all .gguf files in HF hub cache for a model ID (excluding mmproj)."""
+def _snapshot_gguf_files(model_id: str, drafts: bool) -> list[Path]:
+    """List the model's cached GGUFs, either its own files or its sidecars."""
     files: list[Path] = []
     seen: set[Path] = set()
 
@@ -299,12 +345,36 @@ def find_model_gguf_files(model_id: str) -> list[Path]:
     snapshots = hf_dir / "snapshots"
     if snapshots.exists():
         for f in snapshots.glob("**/*.gguf"):
+            if "mmproj" in f.name or is_draft_file(f.name) is not drafts:
+                continue
             resolved = f.resolve()
-            if "mmproj" not in f.name and resolved not in seen:
+            if resolved not in seen:
                 files.append(f)
                 seen.add(resolved)
 
     return sorted(files)
+
+
+def find_model_gguf_files(model_id: str) -> list[Path]:
+    """Find all .gguf files in HF hub cache for a model ID.
+
+    Excludes mmproj files and speculative decoding sidecars, which are
+    separate GGUFs that belong to a model rather than being one.
+    """
+    return _snapshot_gguf_files(model_id, drafts=False)
+
+
+def find_model_draft_files(model_id: str) -> list[Path]:
+    """Find the speculative decoding sidecars cached for a model ID."""
+    return _snapshot_gguf_files(model_id, drafts=True)
+
+
+def find_model_draft_file(model_id: str) -> Path | None:
+    """Return the cached sidecar that goes with a model ID's quant."""
+    files = find_model_draft_files(model_id)
+    quant = model_id.rsplit(":", 1)[1] if ":" in model_id else ""
+    chosen = pick_draft_file([str(f) for f in files], quant)
+    return Path(chosen) if chosen is not None else None
 
 
 

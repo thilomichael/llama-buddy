@@ -5,7 +5,11 @@ from __future__ import annotations
 import shutil
 import subprocess
 
-from llama_buddy.config import find_model_gguf_files, read_preset, sync_preset_with_cache
+from llama_buddy.config import (
+    find_model_gguf_files,
+    read_preset,
+    sync_preset_with_cache,
+)
 from llama_buddy.console import console
 from llama_buddy.select import select_model
 from llama_buddy.settings import load_settings
@@ -17,9 +21,14 @@ def _build_settings_args(model_id: str) -> list[str]:
     preset = read_preset()
 
     # Per-model overrides (from INI)
-    ctx = preset.get(model_id, "c", fallback="0") if preset.has_section(model_id) else "0"
-    ngl = preset.get(model_id, "ngl", fallback="auto") if preset.has_section(model_id) else "auto"
-    fa = preset.get(model_id, "fa", fallback="auto") if preset.has_section(model_id) else "auto"
+    def opt(key: str, default: str) -> str:
+        if not preset.has_section(model_id):
+            return default
+        return preset.get(model_id, key, fallback=default)
+
+    ctx = opt("c", "0")
+    ngl = opt("ngl", "auto")
+    fa = opt("fa", "auto")
 
     args: list[str] = []
 

@@ -464,6 +464,25 @@ def _build_model_meta(model_id: str, preset) -> dict[str, dict]:
     return meta
 
 
+def _sync_draft_model_path(model_id: str, preset, spec_type: str) -> None:
+    """Keep ``spec-draft-model`` in step with the MTP setting.
+
+    A model whose head sits in a sidecar GGUF needs the path to it. The path
+    is only meaningful while MTP is on: left behind, it would make
+    llama-server load a draft model that nothing drafts with.
+    """
+    from llama_buddy.config import find_model_draft_file
+
+    if spec_type != "draft-mtp":
+        preset.remove_option(model_id, "spec-draft-model")
+        return
+    if not has_flag("--spec-draft-model"):
+        return
+    draft = find_model_draft_file(model_id)
+    if draft is not None:
+        preset.set(model_id, "spec-draft-model", str(draft))
+
+
 def _edit_single_model(model_id: str) -> None:
     """Edit settings for a single model in the preset INI file."""
     from llama_buddy.models import get_model_name
@@ -482,6 +501,8 @@ def _edit_single_model(model_id: str) -> None:
             preset.remove_option(model_id, key)
         else:
             preset.set(model_id, key, value)
+        if key == "spec-type":
+            _sync_draft_model_path(model_id, preset, value)
 
     def on_save() -> None:
         write_preset(preset)
