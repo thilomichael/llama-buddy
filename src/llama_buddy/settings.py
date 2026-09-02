@@ -472,6 +472,7 @@ def _sync_draft_model_path(model_id: str, preset, spec_type: str) -> None:
     llama-server load a draft model that nothing drafts with.
     """
     from llama_buddy.config import find_model_draft_file
+    from llama_buddy.models import draft_model_loads
 
     if spec_type != "draft-mtp":
         preset.remove_option(model_id, "spec-draft-model")
@@ -479,7 +480,8 @@ def _sync_draft_model_path(model_id: str, preset, spec_type: str) -> None:
     if not has_flag("--spec-draft-model"):
         return
     draft = find_model_draft_file(model_id)
-    if draft is not None:
+    # The probe result is cached from download time, so this is free.
+    if draft is not None and draft_model_loads(draft):
         preset.set(model_id, "spec-draft-model", str(draft))
 
 

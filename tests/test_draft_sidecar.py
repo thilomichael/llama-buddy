@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import configparser
+from pathlib import Path
 
 import pytest
 
@@ -144,10 +145,27 @@ def test_sync_mtp_param_writes_sidecar_path(monkeypatch, preset, tmp_path):
     monkeypatch.setattr(models, "model_has_mtp", lambda mid: False)
     monkeypatch.setattr(models, "find_model_draft_file", lambda mid: sidecar)
     monkeypatch.setattr(models, "has_flag", lambda flag: True)
+    monkeypatch.setattr(models, "draft_model_loads", lambda p: True)
 
     assert models.sync_mtp_param("org/repo:Q8_0", preset) is True
     assert preset.get("org/repo:Q8_0", "spec-type") == "draft-mtp"
     assert preset.get("org/repo:Q8_0", "spec-draft-model") == str(sidecar)
+
+
+def test_sync_mtp_param_skips_a_head_that_does_not_load(
+    monkeypatch, preset, tmp_path,
+):
+    """Enabling MTP against an unloadable head makes the model unloadable."""
+    monkeypatch.setattr(models, "model_has_mtp", lambda mid: False)
+    monkeypatch.setattr(
+        models, "find_model_draft_file", lambda mid: tmp_path / "mtp-M.gguf",
+    )
+    monkeypatch.setattr(models, "has_flag", lambda flag: True)
+    monkeypatch.setattr(models, "draft_model_loads", lambda p: False)
+
+    assert models.sync_mtp_param("org/repo:Q8_0", preset) is False
+    assert preset.has_option("org/repo:Q8_0", "spec-type") is False
+    assert preset.has_option("org/repo:Q8_0", "spec-draft-model") is False
 
 
 def test_sync_mtp_param_skips_sidecar_on_old_build(
@@ -174,6 +192,135 @@ def test_sync_mtp_param_prefers_in_file_head(monkeypatch, preset, tmp_path):
     assert preset.has_option("org/repo:Q8_0", "spec-draft-model") is False
 
 
+# ---------------------------------------------------------------------------
+# Load probe
+# ---------------------------------------------------------------------------
+
+
+def _fake_server(monkeypatch, lines, exits_after=None):
+    """Stand in for llama-server: emit lines, then optionally exit."""
+    state = {"terminated": False, "args": None}
+
+    class FakeProc:
+        def __init__(self):
+            self._lines = iter(lines)
+            self._reads = 0
+            self.returncode = None
+            self.stdout = self  # readline/close live on the same object
+
+        def poll(self):
+            if exits_after is not None and self._reads >= exits_after:
+                self.returncode = 1
+                return 1
+            return None
+
+        def readline(self):
+            self._reads += 1
+            return next(self._lines, "")
+
+        def close(self):
+            pass
+
+        def terminate(self):
+            state["terminated"] = True
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            pass
+
+    proc = FakeProc()
+
+    monkeypatch.setattr(models.shutil, "which", lambda name: "/bin/llama-server")
+    monkeypatch.setattr(
+        models.subprocess, "Popen",
+        lambda args, **kw: (state.__setitem__("args", args), proc)[1],
+    )
+    return state, proc
+
+
+def test_probe_accepts_a_head_that_starts_listening(monkeypatch):
+    state, _ = _fake_server(monkeypatch, ["loading\n", "listening on http://x\n"])
+    assert models._probe_draft_model(Path("/tmp/mtp-M.gguf")) is True
+    # A probe that succeeds leaves a server running unless it is stopped.
+    assert state["terminated"] is True
+
+
+def test_probe_rejects_a_head_that_exits(monkeypatch):
+    _fake_server(monkeypatch, ["error loading model\n"], exits_after=1)
+    assert models._probe_draft_model(Path("/tmp/mtp-M.gguf")) is False
+
+
+def test_probe_runs_on_cpu_without_warmup(monkeypatch):
+    """The probe must not claim VRAM or generate; it only answers 'loads?'."""
+    state, _ = _fake_server(monkeypatch, ["listening on http://x\n"])
+    models._probe_draft_model(Path("/tmp/mtp-M.gguf"))
+    assert "--no-warmup" in state["args"]
+    assert state["args"][state["args"].index("-ngl") + 1] == "0"
+
+
+def test_probe_without_llama_server(monkeypatch):
+    monkeypatch.setattr(models.shutil, "which", lambda name: None)
+    assert models._probe_draft_model(Path("/tmp/mtp-M.gguf")) is False
+
+
+@pytest.fixture
+def probe_cache(monkeypatch, tmp_path):
+    """Isolate the probe cache and pin the binary it is keyed on."""
+    monkeypatch.setattr(models, "MTP_CACHE_FILE", tmp_path / "mtp.json")
+    monkeypatch.setattr(models, "_mtp_cache", None)
+    monkeypatch.setattr(models.shutil, "which", lambda name: "/bin/llama-server")
+    monkeypatch.setattr(models, "_binary_key", lambda b: "build-1")
+    calls = []
+    monkeypatch.setattr(
+        models, "_probe_draft_model", lambda p: (calls.append(p), True)[1],
+    )
+    return calls
+
+
+def test_draft_model_loads_is_cached(monkeypatch, tmp_path, probe_cache):
+    sidecar = tmp_path / "mtp-M-Q8_0.gguf"
+    sidecar.write_bytes(b"x" * 100)
+
+    assert models.draft_model_loads(sidecar) is True
+    assert models.draft_model_loads(sidecar) is True
+    assert len(probe_cache) == 1
+
+    # A re-download changes the size, so the answer is looked up again.
+    sidecar.write_bytes(b"x" * 200)
+    monkeypatch.setattr(models, "_mtp_cache", None)
+    assert models.draft_model_loads(sidecar) is True
+    assert len(probe_cache) == 2
+
+
+def test_draft_model_loads_reprobes_after_a_llama_cpp_upgrade(
+    monkeypatch, tmp_path, probe_cache,
+):
+    """Whether a head loads is a fact about the file and the build."""
+    sidecar = tmp_path / "mtp-M-Q8_0.gguf"
+    sidecar.write_bytes(b"x" * 100)
+    assert models.draft_model_loads(sidecar) is True
+    assert len(probe_cache) == 1
+
+    monkeypatch.setattr(models, "_binary_key", lambda b: "build-2")
+    monkeypatch.setattr(models, "_mtp_cache", None)
+    assert models.draft_model_loads(sidecar) is True
+    assert len(probe_cache) == 2
+
+
+def test_draft_model_loads_on_missing_file(probe_cache, tmp_path):
+    assert models.draft_model_loads(tmp_path / "gone.gguf") is False
+
+
+def test_draft_model_loads_without_llama_server(monkeypatch, tmp_path):
+    monkeypatch.setattr(models, "MTP_CACHE_FILE", tmp_path / "mtp.json")
+    monkeypatch.setattr(models, "_mtp_cache", None)
+    monkeypatch.setattr(models.shutil, "which", lambda name: None)
+    assert models.draft_model_loads(tmp_path / "mtp-M.gguf") is False
+
+
 def test_turning_mtp_off_drops_the_sidecar_path(preset):
     from llama_buddy.settings import _sync_draft_model_path
 
@@ -190,6 +337,7 @@ def test_turning_mtp_back_on_restores_the_sidecar_path(
     sidecar = tmp_path / "mtp-M-Q8_0.gguf"
     monkeypatch.setattr(config, "find_model_draft_file", lambda mid: sidecar)
     monkeypatch.setattr(settings, "has_flag", lambda flag: True)
+    monkeypatch.setattr(models, "draft_model_loads", lambda p: True)
 
     settings._sync_draft_model_path("org/repo:Q8_0", preset, "draft-mtp")
     assert preset.get("org/repo:Q8_0", "spec-draft-model") == str(sidecar)

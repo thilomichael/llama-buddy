@@ -926,7 +926,23 @@ def _download_mtp_sidecar(
 
     console.print("Repo ships a multi-token-prediction head:")
     _download_files(repo_id, entry, org, repo_name, name)
-    return find_model_draft_file(model_id)
+
+    draft = find_model_draft_file(model_id)
+    if draft is None:
+        return None
+
+    from llama_buddy.models import draft_model_loads
+
+    with console.status("Checking the head loads…", spinner="dots"):
+        ok = draft_model_loads(draft)
+    if not ok:
+        console.print(
+            "The head does not load on its own, so llama-server cannot use "
+            "it as a draft model. Leaving MTP off for this model.",
+            style="yellow",
+        )
+        return None
+    return draft
 
 
 # GGUF general.sampling.* → llama-server INI key mapping
