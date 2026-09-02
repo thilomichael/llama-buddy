@@ -25,6 +25,7 @@ from rich.text import Text
 from llama_buddy.config import (
     find_model_draft_file,
     find_model_gguf_files,
+    find_model_mtp_file,
     get_hf_hub_dir,
     hf_model_dir,
     is_draft_file,
@@ -927,18 +928,23 @@ def _download_mtp_sidecar(
     console.print("Repo ships a multi-token-prediction head:")
     _download_files(repo_id, entry, org, repo_name, name)
 
-    draft = find_model_draft_file(model_id)
+    draft = find_model_mtp_file(model_id)
     if draft is None:
         return None
 
     from llama_buddy.models import draft_model_loads
 
-    with console.status("Checking the head loads…", spinner="dots"):
-        ok = draft_model_loads(draft)
+    # Costs a model load, but a head the installed llama.cpp cannot drive
+    # would otherwise take the whole model down at start.
+    with console.status(
+        "Checking the head loads with this llama.cpp build…", spinner="dots",
+    ):
+        ok = draft_model_loads(model_id, draft)
     if not ok:
         console.print(
-            "The head does not load on its own, so llama-server cannot use "
-            "it as a draft model. Leaving MTP off for this model.",
+            "The installed llama-server cannot load this head with the model, "
+            "so MTP stays off for now. It is checked again after a llama.cpp "
+            "upgrade.",
             style="yellow",
         )
         return None

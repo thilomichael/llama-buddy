@@ -8,8 +8,8 @@ from rich.panel import Panel
 from rich.table import Table
 
 from llama_buddy.config import (
-    find_model_draft_file,
     find_model_gguf_files,
+    find_model_mtp_file,
     read_preset,
     resolve_model,
     write_preset,
@@ -166,7 +166,7 @@ def show_info(model_id_or_path: str) -> None:
     )
     model_id = resolve_model(model_id_or_path)
     sidecar = (
-        find_model_draft_file(model_id) if model_id is not None else None
+        find_model_mtp_file(model_id) if model_id is not None else None
     )
     if in_file or sidecar is not None:
         preset = read_preset()

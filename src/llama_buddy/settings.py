@@ -464,25 +464,39 @@ def _build_model_meta(model_id: str, preset) -> dict[str, dict]:
     return meta
 
 
-def _sync_draft_model_path(model_id: str, preset, spec_type: str) -> None:
+def _sync_draft_model_path(model_id: str, preset) -> None:
     """Keep ``spec-draft-model`` in step with the MTP setting.
 
     A model whose head sits in a sidecar GGUF needs the path to it. The path
     is only meaningful while MTP is on: left behind, it would make
     llama-server load a draft model that nothing drafts with.
+
+    Adding the path may probe the pair, which costs a model load, so this
+    runs on save rather than inside the editor's Live.
     """
-    from llama_buddy.config import find_model_draft_file
+    from llama_buddy.config import find_model_mtp_file
     from llama_buddy.models import draft_model_loads
 
-    if spec_type != "draft-mtp":
+    if preset.get(model_id, "spec-type", fallback="") != "draft-mtp":
         preset.remove_option(model_id, "spec-draft-model")
         return
-    if not has_flag("--spec-draft-model"):
+    if preset.has_option(model_id, "spec-draft-model"):
         return
-    draft = find_model_draft_file(model_id)
-    # The probe result is cached from download time, so this is free.
-    if draft is not None and draft_model_loads(draft):
+    draft = find_model_mtp_file(model_id)
+    if draft is None:
+        return
+    with console.status(
+        "Checking the head loads with this llama.cpp build…", spinner="dots",
+    ):
+        ok = draft_model_loads(model_id, draft)
+    if ok:
         preset.set(model_id, "spec-draft-model", str(draft))
+    else:
+        console.print(
+            "The installed llama-server cannot load this model's MTP head, "
+            "so it is not wired in.",
+            style="yellow",
+        )
 
 
 def _edit_single_model(model_id: str) -> None:
@@ -503,10 +517,9 @@ def _edit_single_model(model_id: str) -> None:
             preset.remove_option(model_id, key)
         else:
             preset.set(model_id, key, value)
-        if key == "spec-type":
-            _sync_draft_model_path(model_id, preset, value)
 
     def on_save() -> None:
+        _sync_draft_model_path(model_id, preset)
         write_preset(preset)
         console.print(
             f"Model settings for [bold]{display_name}[/bold] saved.",

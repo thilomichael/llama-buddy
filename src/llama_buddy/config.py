@@ -295,26 +295,59 @@ def sync_preset_with_cache() -> list[str]:
 
 
 def _backfill_mtp(preset) -> bool:
-    """Enable MTP for models that were added before llb detected the head.
+    """Enable MTP for models whose head could not be used before.
 
-    Scanning every model costs a couple of seconds, and models added from
-    here on are checked as they arrive, so this runs once and leaves a
-    marker. Returns True when the preset was changed.
+    Covers models added before llb detected heads, and sidecar heads the
+    llama.cpp of the time could not load: support for an architecture's
+    MTP graph lands in llama.cpp after the model does, so the answer has
+    to be asked again when the binary changes. Models added from here on
+    are checked as they arrive, so this runs once per binary and records
+    which one it checked. Returns True when the preset was changed.
     """
-    if MTP_BACKFILL_FILE.exists():
-        return False
+    from llama_buddy.capabilities import _binary_key
+    from llama_buddy.models import sync_mtp_param, unwire_unloadable_sidecar
 
-    from llama_buddy.models import sync_mtp_param
+    binary = shutil.which("llama-server")
+    marker = _binary_key(binary) if binary else "no-binary"
+    try:
+        if MTP_BACKFILL_FILE.read_text().strip() == marker:
+            return False
+    except OSError:
+        pass
+
+    from llama_buddy.console import console
 
     changed = False
-    for section in preset.sections():
-        if section == "*":
-            continue
-        if sync_mtp_param(section, preset):
-            changed = True
+    enabled: list[str] = []
+    dropped: list[str] = []
+    # A sidecar that has not been probed against this binary costs a model
+    # load here, so say what is going on.
+    with console.status(
+        "Checking multi-token-prediction heads with this llama.cpp build…",
+        spinner="dots",
+    ):
+        for section in preset.sections():
+            if section == "*":
+                continue
+            if sync_mtp_param(section, preset):
+                enabled.append(section)
+                changed = True
+            # The other direction: a build that can no longer load a head
+            # that was wired in must not be handed it.
+            elif unwire_unloadable_sidecar(section, preset):
+                dropped.append(section)
+                changed = True
+
+    for section in enabled:
+        console.print(f"Enabled MTP speculative decoding for {section}.", style="dim")
+    for section in dropped:
+        console.print(
+            f"Disabled MTP for {section}: this llama-server cannot load its head.",
+            style="yellow",
+        )
 
     ensure_config_dir()
-    MTP_BACKFILL_FILE.touch()
+    MTP_BACKFILL_FILE.write_text(marker + "\n")
     return changed
 
 
@@ -371,11 +404,26 @@ def find_model_draft_files(model_id: str) -> list[Path]:
 
 def find_model_draft_file(model_id: str) -> Path | None:
     """Return the cached sidecar that goes with a model ID's quant."""
-    files = find_model_draft_files(model_id)
+    return _pick_model_draft(model_id, find_model_draft_files(model_id))
+
+
+def find_model_mtp_file(model_id: str) -> Path | None:
+    """Return the cached MTP head that goes with a model ID's quant.
+
+    Other draft kinds (``dspark-``, ``dflash-``, ``eagle3-``) want their own
+    ``spec-type`` and must never be wired in as ``draft-mtp``.
+    """
+    heads = [
+        f for f in find_model_draft_files(model_id)
+        if f.name.lower().startswith("mtp-")
+    ]
+    return _pick_model_draft(model_id, heads)
+
+
+def _pick_model_draft(model_id: str, files: list[Path]) -> Path | None:
     quant = model_id.rsplit(":", 1)[1] if ":" in model_id else ""
     chosen = pick_draft_file([str(f) for f in files], quant)
     return Path(chosen) if chosen is not None else None
-
 
 
 # ---------------------------------------------------------------------------

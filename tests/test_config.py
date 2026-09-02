@@ -122,6 +122,9 @@ def test_sync_preset_with_cache(tmp_path, monkeypatch):
     hf_dir.mkdir()
     monkeypatch.setattr("llama_buddy.config.PRESET_FILE", preset_file)
     monkeypatch.setattr("llama_buddy.config.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(
+        "llama_buddy.config.MTP_BACKFILL_FILE", tmp_path / "mtp_backfill_done"
+    )
     monkeypatch.setattr("llama_buddy.config.get_hf_hub_dir", lambda: hf_dir)
 
     # Create an existing preset with one model
@@ -149,6 +152,9 @@ def test_sync_preset_no_duplicates(tmp_path, monkeypatch):
     hf_dir.mkdir()
     monkeypatch.setattr("llama_buddy.config.PRESET_FILE", preset_file)
     monkeypatch.setattr("llama_buddy.config.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(
+        "llama_buddy.config.MTP_BACKFILL_FILE", tmp_path / "mtp_backfill_done"
+    )
     monkeypatch.setattr("llama_buddy.config.get_hf_hub_dir", lambda: hf_dir)
 
     _make_hf_model(hf_dir, "org", "model-GGUF", "model-Q4_K_M.gguf")

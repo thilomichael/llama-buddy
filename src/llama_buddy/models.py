@@ -19,8 +19,8 @@ from llama_buddy.config import (
     CONFIG_DIR,
     DEFAULT_PORT,
     ensure_config_dir,
-    find_model_draft_file,
     find_model_gguf_files,
+    find_model_mtp_file,
     get_gguf_model_groups,
     get_hf_hub_dir,
     is_draft_file,
@@ -132,9 +132,9 @@ def get_model_name(model_id: str) -> str:
 
 MTP_CACHE_FILE = CONFIG_DIR / "mtp.json"
 
-# A sidecar that loads reaches the listening line in about a second on CPU;
+# The probe pays the model's load time (~35s for 90 GB on CPU, no warmup);
 # anything past this is a hung probe, not a slow one.
-DRAFT_PROBE_TIMEOUT = 90
+DRAFT_PROBE_TIMEOUT = 600
 
 _mtp_cache: dict[str, dict] | None = None
 
@@ -211,17 +211,20 @@ def model_has_mtp(model_id: str) -> bool:
     return result
 
 
-def _probe_draft_model(path: Path) -> bool:
-    """Try to load a draft GGUF on its own and report whether it works.
+def _probe_draft_model(model: Path, draft: Path) -> bool:
+    """Start the model with the head as its draft and report whether it comes up.
 
-    llama-server loads a sidecar head through the ordinary model loader,
-    which insists on every tensor the head's architecture declares
-    required. A head that omits one (unsloth's qwen4exp heads have no
-    ``output_hc_norm.weight``) takes the whole model down with it, so it
-    is worth 1s to find out before writing the setting.
+    A head cannot be judged on its own. A build without an MTP graph for
+    the architecture pushes the sidecar through the ordinary loader and
+    fails on a tensor only the full model has (``output_hc_norm.weight``
+    for qwen4exp), while a build that does understand it rejects a head
+    loaded without its target. Only the real pair answers, so this is the
+    model's own start command minus warmup, kept on the CPU with a tiny
+    context. It costs about the model's load time, once per file and
+    binary, and a wrong answer would take the whole child down.
 
-    A load failure exits within a second; a success reaches the listening
-    line and then has to be stopped.
+    A failure exits on its own; a success reaches the listening line and
+    then has to be stopped.
     """
     binary = shutil.which("llama-server")
     if binary is None:
@@ -233,8 +236,9 @@ def _probe_draft_model(path: Path) -> bool:
 
     try:
         proc = subprocess.Popen(
-            [binary, "-m", str(path), "--port", str(port), "-ngl", "0",
-             "--no-warmup"],
+            [binary, "-m", str(model), "-md", str(draft),
+             "--spec-type", "draft-mtp", "--port", str(port),
+             "-ngl", "0", "-ngld", "0", "-c", "512", "--no-warmup"],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             errors="replace",
         )
@@ -263,28 +267,33 @@ def _probe_draft_model(path: Path) -> bool:
     return loaded
 
 
-def draft_model_loads(path: Path) -> bool:
-    """Whether llama-server can load this sidecar.
+def draft_model_loads(model_id: str, draft: Path) -> bool:
+    """Whether llama-server can run this model with the sidecar as its draft.
 
-    Cached against the file *and* the binary: whether a head loads is a
-    fact about the pair, and a llama.cpp that grows support for the
+    Cached against the files *and* the binary: whether a head loads is a
+    fact about all three, and a llama.cpp that grows support for the
     architecture has to be given the chance to answer differently.
     """
     binary = shutil.which("llama-server")
     if binary is None:
         return False
+    if not has_flag("--spec-draft-model") or not has_flag("--spec-type"):
+        return False
+    files = find_model_gguf_files(model_id)
+    if not files:
+        return False
     try:
-        signature = f"{path.name}:{path.stat().st_size}:{_binary_key(binary)}"
+        signature = f"{_mtp_signature([files[0], draft])}:{_binary_key(binary)}"
     except OSError:
         return False
 
     cache = _read_mtp_cache()
-    key = f"draft:{path.name}"
+    key = f"draft:{model_id}"
     entry = cache.get(key)
     if isinstance(entry, dict) and entry.get("signature") == signature:
         return bool(entry.get("loads"))
 
-    result = _probe_draft_model(path)
+    result = _probe_draft_model(files[0], draft)
     cache[key] = {"signature": signature, "loads": result}
     _write_mtp_cache(cache)
     return result
@@ -305,13 +314,29 @@ def sync_mtp_param(model_id: str, preset) -> bool:
         preset.set(model_id, "spec-type", "draft-mtp")
         return True
 
-    draft = find_model_draft_file(model_id)
-    if draft is None or not has_flag("--spec-draft-model"):
-        return False
-    if not draft_model_loads(draft):
+    draft = find_model_mtp_file(model_id)
+    if draft is None or not draft_model_loads(model_id, draft):
         return False
     preset.set(model_id, "spec-type", "draft-mtp")
     preset.set(model_id, "spec-draft-model", str(draft))
+    return True
+
+
+def unwire_unloadable_sidecar(model_id: str, preset) -> bool:
+    """Drop a sidecar the installed llama-server cannot load with its model.
+
+    The inverse of :func:`sync_mtp_param` for a binary change in the other
+    direction: a downgrade, or a build that lost the architecture. Left in
+    place, the setting would take the model down at start. Returns True
+    when the preset was changed.
+    """
+    if not preset.has_option(model_id, "spec-draft-model"):
+        return False
+    draft = Path(preset.get(model_id, "spec-draft-model"))
+    if draft.is_file() and draft_model_loads(model_id, draft):
+        return False
+    preset.remove_option(model_id, "spec-draft-model")
+    preset.remove_option(model_id, "spec-type")
     return True
 
 
@@ -392,7 +417,7 @@ def _effective_ctx(
 
 def _mtp_cell(model_id: str, preset) -> str:
     """Render the MTP column: whether the head exists and whether it is used."""
-    if not model_has_mtp(model_id) and find_model_draft_file(model_id) is None:
+    if not model_has_mtp(model_id) and find_model_mtp_file(model_id) is None:
         return "[dim]-[/dim]"
     spec = (
         preset.get(model_id, "spec-type", fallback="")

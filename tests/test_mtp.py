@@ -230,3 +230,28 @@ def test_model_has_mtp_rescans_after_redownload(tmp_path, monkeypatch):
     models.model_has_mtp.cache_clear()
 
     assert models.model_has_mtp("org/repo:Q8_0") is True
+
+
+def test_backfill_runs_again_when_llama_server_changes(tmp_path, monkeypatch):
+    """A head the old build could not load may work on the new one."""
+    from llama_buddy import capabilities, config
+
+    monkeypatch.setattr(config, "MTP_BACKFILL_FILE", tmp_path / "mtp_backfill_done")
+    monkeypatch.setattr(config, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(config.shutil, "which", lambda name: "/bin/llama-server")
+    monkeypatch.setattr(capabilities, "_binary_key", lambda b: "build-1")
+    synced: list[str] = []
+    monkeypatch.setattr(
+        models, "sync_mtp_param", lambda mid, p: (synced.append(mid), False)[1],
+    )
+    monkeypatch.setattr(models, "unwire_unloadable_sidecar", lambda mid, p: False)
+    preset = configparser.ConfigParser()
+    preset.add_section("org/repo:Q8_0")
+
+    config._backfill_mtp(preset)
+    config._backfill_mtp(preset)
+    assert synced == ["org/repo:Q8_0"]
+
+    monkeypatch.setattr(capabilities, "_binary_key", lambda b: "build-2")
+    config._backfill_mtp(preset)
+    assert synced == ["org/repo:Q8_0", "org/repo:Q8_0"]
