@@ -60,11 +60,20 @@ def get_cache_dir() -> Path:
 def get_hf_hub_dir() -> Path:
     """Return the HuggingFace hub cache directory.
 
-    llama-server 8500+ uses this as the primary model cache.
+    llama-server 8500+ uses this as the primary model cache. The lookup
+    order mirrors hf_cache::get_cache_directory() in llama.cpp, so llb reads
+    and writes the same directory the router lists models from.
     """
-    hf_home = os.environ.get("HF_HOME")
-    if hf_home:
-        return Path(hf_home) / "hub"
+    for var, sub in (
+        ("LLAMA_CACHE", ()),
+        ("HF_HUB_CACHE", ()),
+        ("HUGGINGFACE_HUB_CACHE", ()),
+        ("HF_HOME", ("hub",)),
+        ("XDG_CACHE_HOME", ("huggingface", "hub")),
+    ):
+        base = os.environ.get(var)
+        if base:
+            return Path(base).joinpath(*sub)
     return Path.home() / ".cache" / "huggingface" / "hub"
 
 
@@ -73,9 +82,15 @@ def hf_model_dir(org: str, repo: str) -> Path:
     return get_hf_hub_dir() / f"models--{org}--{repo}"
 
 
-def _hf_model_dir_for_id(model_id: str) -> Path:
-    """Return the HF hub dir for a model ID (org/repo or org/repo:quant)."""
+def _hf_model_dir_for_id(model_id: str) -> Path | None:
+    """Return the HF hub dir for a model ID (org/repo or org/repo:quant).
+
+    The router also lists models that never came from HF, such as a local
+    GGUF named after its file; those have no org and no hub dir.
+    """
     base_repo = model_id.split(":")[0]
+    if "/" not in base_repo:
+        return None
     org, repo = base_repo.split("/", 1)
     return hf_model_dir(org, repo)
 
@@ -375,6 +390,8 @@ def _snapshot_gguf_files(model_id: str, drafts: bool) -> list[Path]:
     seen: set[Path] = set()
 
     hf_dir = _hf_model_dir_for_id(model_id)
+    if hf_dir is None:
+        return files
     snapshots = hf_dir / "snapshots"
     if snapshots.exists():
         for f in snapshots.glob("**/*.gguf"):

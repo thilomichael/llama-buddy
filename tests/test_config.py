@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from llama_buddy.config import (
+    find_model_gguf_files,
+    find_model_mtp_file,
+    get_hf_hub_dir,
     parse_vram_from_log,
     read_pid,
     read_preset,
@@ -246,3 +251,35 @@ def test_update_vram_usage_writes_file(tmp_path, monkeypatch):
     # Reading back should return the same data
     cached = read_vram_usage()
     assert cached == result
+
+
+def test_find_files_for_id_without_org(tmp_path, monkeypatch):
+    # The router lists local GGUFs by bare name; they have no HF hub dir
+    monkeypatch.setattr("llama_buddy.config.get_hf_hub_dir", lambda: tmp_path)
+    assert find_model_gguf_files("laguna-s-2.1-Q4_K_M") == []
+    assert find_model_gguf_files("local-model:Q4_K_M") == []
+    assert find_model_mtp_file("local-model") is None
+
+
+_HUB_VARS = (
+    "LLAMA_CACHE", "HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE", "HF_HOME",
+    "XDG_CACHE_HOME",
+)
+
+
+def test_hf_hub_dir_follows_llama_cpp_order(tmp_path, monkeypatch):
+    for var in _HUB_VARS:
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert get_hf_hub_dir() == tmp_path / ".cache" / "huggingface" / "hub"
+
+    monkeypatch.setenv("XDG_CACHE_HOME", "/xdg")
+    assert get_hf_hub_dir() == Path("/xdg/huggingface/hub")
+    monkeypatch.setenv("HF_HOME", "/hf")
+    assert get_hf_hub_dir() == Path("/hf/hub")
+    monkeypatch.setenv("HUGGINGFACE_HUB_CACHE", "/hub-legacy")
+    assert get_hf_hub_dir() == Path("/hub-legacy")
+    monkeypatch.setenv("HF_HUB_CACHE", "/hub")
+    assert get_hf_hub_dir() == Path("/hub")
+    monkeypatch.setenv("LLAMA_CACHE", "/llama")
+    assert get_hf_hub_dir() == Path("/llama")

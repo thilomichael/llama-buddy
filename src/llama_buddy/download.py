@@ -1291,7 +1291,7 @@ def _remove_model(section: str, keep_files: bool) -> None:
         # Clean up HF hub model dir if no model GGUFs remain. Sidecars left
         # behind without a model to draft for go too.
         hf_dir = _hf_model_dir_for_id(section)
-        if hf_dir.exists():
+        if hf_dir is not None and hf_dir.exists():
             remaining = [
                 p for p in hf_dir.glob("snapshots/**/*.gguf")
                 if not is_draft_file(p.name)
