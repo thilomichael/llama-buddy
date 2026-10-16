@@ -8,8 +8,10 @@ from rich.panel import Panel
 from rich.table import Table
 
 from llama_buddy.config import (
+    all_model_ids,
     find_model_gguf_files,
     find_model_mtp_file,
+    key_names,
     read_preset,
     resolve_model,
     write_preset,
@@ -94,13 +96,13 @@ def apply_sampling(model_id_or_path: str | None = None) -> None:
         model_id = resolve_model(model_id_or_path)
         if model_id is None:
             console.print(
-                f"Model '{model_id_or_path}' not found in preset file.",
+                f"Model '{model_id_or_path}' not found.",
                 style="red",
             )
             raise SystemExit(1)
         model_ids = [model_id]
     else:
-        model_ids = [s for s in preset.sections() if s != "*"]
+        model_ids = all_model_ids(preset)
 
     changed = False
     for mid in model_ids:
@@ -170,11 +172,12 @@ def show_info(model_id_or_path: str) -> None:
     )
     if in_file or sidecar is not None:
         preset = read_preset()
-        enabled = (
-            model_id is not None
-            and preset.has_section(model_id)
-            and "draft-mtp" in preset.get(model_id, "spec-type", fallback="")
+        spec = (
+            preset.get_any(model_id, key_names("spec-type"), "")
+            if model_id is not None
+            else ""
         )
+        enabled = "draft-mtp" in (spec or "")
         state = (
             "[green]enabled[/green]" if enabled
             else "[yellow]available, not enabled[/yellow]"

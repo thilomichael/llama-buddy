@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-import configparser
 import json
 import os
 import re
 import shutil
-import subprocess
-import sys
-from functools import lru_cache
 from pathlib import Path
+
+from llama_buddy.ini import IniFile
 
 CONFIG_DIR = Path.home() / ".config" / "llama"
 PRESET_FILE = CONFIG_DIR / "models.ini"
@@ -20,41 +18,6 @@ VRAM_FILE = CONFIG_DIR / "vram.json"
 MTP_BACKFILL_FILE = CONFIG_DIR / "mtp_backfill_done"
 
 DEFAULT_PORT = 8080
-
-
-def _default_cache_dir() -> Path:
-    """Platform-appropriate default cache directory for llama.cpp."""
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Caches" / "llama.cpp"
-    # Linux / other: follow XDG
-    xdg = Path.home() / ".cache"
-    return xdg / "llama.cpp"
-
-
-@lru_cache(maxsize=1)
-def get_cache_dir() -> Path:
-    """Detect the llama.cpp cache directory.
-
-    Queries `llama-server --cache-list` which prints the cache path.
-    Falls back to platform-specific defaults.
-    """
-    binary = shutil.which("llama-server")
-    if binary is not None:
-        try:
-            result = subprocess.run(
-                [binary, "--cache-list"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            for line in result.stdout.splitlines():
-                if line.startswith("model cache directory:"):
-                    path = Path(line.split(":", 1)[1].strip())
-                    if path.exists():
-                        return path
-        except (subprocess.TimeoutExpired, OSError):
-            pass
-    return _default_cache_dir()
 
 
 def get_hf_hub_dir() -> Path:
@@ -156,22 +119,111 @@ def ensure_config_dir() -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def read_preset() -> configparser.ConfigParser:
-    config = configparser.ConfigParser()
-    if PRESET_FILE.exists():
-        text = PRESET_FILE.read_text()
-        # llama-server preset files may have top-level keys (e.g. "version = 1")
-        # before any section header. Wrap them in a [DEFAULT] section.
-        if text and not text.lstrip().startswith("["):
-            text = "[DEFAULT]\n" + text
-        config.read_string(text, source=str(PRESET_FILE))
-    return config
+# ---------------------------------------------------------------------------
+# llama.cpp's own configuration
+# ---------------------------------------------------------------------------
 
 
-def write_preset(config: configparser.ConfigParser) -> None:
-    ensure_config_dir()
-    with open(PRESET_FILE, "w") as f:
-        config.write(f)
+def llama_config_file() -> Path:
+    """llama.cpp's user-level config.ini, read by every llama.cpp tool."""
+    base = os.environ.get("XDG_CONFIG_HOME")
+    root = Path(base) if base else Path.home() / ".config"
+    return root / "llama.cpp" / "config.ini"
+
+
+def _llama_config_value(key: str) -> str | None:
+    """Read a key from config.ini. Only its default and ``[*]`` sections apply."""
+    config = IniFile.load(llama_config_file())
+    return config.get("*", key, fallback=config.get(None, key))
+
+
+def get_port() -> int:
+    """The router's port, looked up the way llama-server looks it up."""
+    for raw in (os.environ.get("LLAMA_ARG_PORT"), _llama_config_value("port")):
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            continue
+    return DEFAULT_PORT
+
+
+def set_port(port: int) -> None:
+    """Store the port in config.ini, or drop it there when it is the default."""
+    path = llama_config_file()
+    config = IniFile.load(path)
+    config.remove_option("*", "port")
+    if port == DEFAULT_PORT:
+        if not config.remove_option(None, "port"):
+            return
+    else:
+        config.set(None, "port", str(port))
+    config.write(path)
+
+
+def preset_path() -> Path:
+    """The preset file the router is given with ``--models-preset``.
+
+    A preset the user already points llama-server at, through the
+    environment or config.ini, is used as is; llb's own file is only the
+    fallback.
+    """
+    for raw in (
+        os.environ.get("LLAMA_ARG_MODELS_PRESET"),
+        _llama_config_value("models-preset"),
+    ):
+        if raw:
+            return Path(raw).expanduser()
+    return PRESET_FILE
+
+
+def read_preset() -> IniFile:
+    return IniFile.load(preset_path())
+
+
+def write_preset(preset: IniFile) -> None:
+    preset.write(preset_path())
+
+
+# Every name llama.cpp accepts for a flag works as a preset key, so a
+# hand-written file may spell a setting differently from llb.
+_KEY_NAMES: dict[str, tuple[str, ...]] = {
+    "c": ("c", "ctx-size", "LLAMA_ARG_CTX_SIZE"),
+    "ngl": ("ngl", "gpu-layers", "n-gpu-layers", "LLAMA_ARG_N_GPU_LAYERS"),
+    "fa": ("fa", "flash-attn", "LLAMA_ARG_FLASH_ATTN"),
+    "jinja": ("jinja", "LLAMA_ARG_JINJA"),
+    "alias": ("alias", "a", "LLAMA_ARG_ALIAS"),
+    "load-mode": ("load-mode", "lm"),
+    "lazy-mode": ("lazy-mode", "lzm"),
+    "ncmoe": ("ncmoe", "n-cpu-moe"),
+    "ncffn": ("ncffn", "n-cpu-ffn"),
+    "spec-type": ("spec-type", "LLAMA_ARG_SPEC_TYPE"),
+    "spec-draft-model": (
+        "spec-draft-model", "md", "model-draft", "LLAMA_ARG_SPEC_DRAFT_MODEL",
+    ),
+}
+_MODEL_KEYS = ("model", "m", "LLAMA_ARG_MODEL")
+_HF_KEYS = ("hf-repo", "hf", "hfr", "LLAMA_ARG_HF_REPO")
+
+
+def key_names(key: str) -> tuple[str, ...]:
+    """All spellings of a preset key, llb's own first."""
+    return _KEY_NAMES.get(key, (key,))
+
+
+def model_option(
+    preset: IniFile, model_id: str, key: str, fallback: str | None = None,
+) -> str | None:
+    """A model's setting, falling back to the preset's ``[*]`` section."""
+    names = key_names(key)
+    value = preset.get_any(model_id, names)
+    if value is None:
+        value = preset.get_any("*", names, fallback)
+    return value
+
+
+def section_aliases(preset: IniFile, section: str) -> list[str]:
+    raw = preset.get_any(section, key_names("alias"), "") or ""
+    return [a.strip() for a in raw.split(",") if a.strip()]
 
 
 def read_pid() -> int | None:
@@ -195,27 +247,43 @@ def remove_pid() -> None:
     PID_FILE.unlink(missing_ok=True)
 
 
-def resolve_model(name: str) -> str | None:
-    """Resolve a model name or alias to a preset section (model ID).
+def all_model_ids(preset: IniFile | None = None) -> list[str]:
+    """Every model the router offers: the cached ones plus preset sections.
 
-    Matches against: exact section name, alias, or case-insensitive alias.
-    Returns the section name (model ID) or None.
+    The router lists cached models on its own, so a model only has a preset
+    section when something about it differs from the defaults, or when the
+    section defines a model under a name of its own.
+    """
+    if preset is None:
+        preset = read_preset()
+    ids = _get_manifest_model_ids()
+    ids.update(s for s in preset.sections() if s != "*")
+    return sorted(ids)
+
+
+def resolve_model(name: str) -> str | None:
+    """Resolve a model ID or alias to the ID the router knows it by.
+
+    Matches the exact ID, then an alias, then either one ignoring case.
     """
     preset = read_preset()
-    # Exact section match
-    if name in preset:
+    ids = all_model_ids(preset)
+    if name in ids:
         return name
-    # Alias match
-    for section in preset.sections():
-        alias = preset.get(section, "alias", fallback=None)
-        if alias is not None and alias == name:
-            return section
-    # Case-insensitive alias match
+    aliases = {
+        alias: section
+        for section in preset.sections()
+        for alias in section_aliases(preset, section)
+    }
+    if name in aliases:
+        return aliases[name]
     name_lower = name.lower()
-    for section in preset.sections():
-        alias = preset.get(section, "alias", fallback=None)
-        if alias is not None and alias.lower() == name_lower:
+    for alias, section in aliases.items():
+        if alias.lower() == name_lower:
             return section
+    for model_id in ids:
+        if model_id.lower() == name_lower:
+            return model_id
     return None
 
 
@@ -262,43 +330,42 @@ def _get_manifest_model_ids() -> set[str]:
 
 
 def sync_preset_with_cache() -> list[str]:
-    """Sync the preset file with the cache.
+    """Bring the preset in line with the cache.
 
-    - Adds models found in HF hub cache that are missing from the preset.
-    - Removes orphaned preset entries (no GGUF files on disk).
+    - Moves settings out of the old settings.json (once).
+    - Drops sections that set nothing, and sections for cached models whose
+      files are gone.
+    - Turns MTP on for models it has not seen before, and re-checks every
+      model when the llama-server binary changes.
 
-    Returns a list of model IDs that were added.
+    Returns the model IDs MTP was turned on for.
     """
-    discovered_ids = _get_manifest_model_ids()
+    from llama_buddy.models import mtp_checked, sync_mtp_param
+    from llama_buddy.settings import migrate_settings_file
 
     preset = read_preset()
-    sections = {s.lower(): s for s in preset.sections()}
-    changed = False
-    added: list[str] = []
+    changed = migrate_settings_file(preset)
+    discovered = _get_manifest_model_ids()
 
-    # Add models found in HF hub cache that are missing from the preset.
-    # MTP detection reads the GGUF tensor block, so it only runs for models
-    # being added rather than on every command.
-    from llama_buddy.models import sync_mtp_param
-
-    for model_id in sorted(discovered_ids):
-        if model_id.lower() not in sections:
-            preset.add_section(model_id)
-            sections[model_id.lower()] = model_id
-            added.append(model_id)
-            sync_mtp_param(model_id, preset)
+    for section in list(preset.sections()):
+        if not preset.options(section):
+            preset.remove_section(section)
+            changed = True
+        elif (
+            section != "*"
+            and section not in discovered
+            and _is_orphan(preset, section)
+        ):
+            preset.remove_section(section)
             changed = True
 
-    # Remove orphaned preset entries (no GGUF files on disk)
-    for section in list(preset.sections()):
-        if section == "*":
-            continue
-        if section in discovered_ids:
-            continue
-        if find_model_gguf_files(section):
-            continue
-        preset.remove_section(section)
-        changed = True
+    # MTP detection reads the GGUF tensor block, so it runs once per model
+    # rather than on every command.
+    enabled: list[str] = []
+    for model_id in all_model_ids(preset):
+        if not mtp_checked(model_id) and sync_mtp_param(model_id, preset):
+            enabled.append(model_id)
+            changed = True
 
     if _backfill_mtp(preset):
         changed = True
@@ -306,7 +373,21 @@ def sync_preset_with_cache() -> list[str]:
     if changed:
         write_preset(preset)
 
-    return added
+    return enabled
+
+
+def _is_orphan(preset: IniFile, section: str) -> bool:
+    """Whether a section is settings for a cached model that is gone.
+
+    Only sections named after an HF model count. A section that brings its
+    own model (``hf-repo``, ``model``) or is named after a file in
+    ``--models-dir`` is the user's to remove.
+    """
+    if "/" not in section:
+        return False
+    if preset.get_any(section, _MODEL_KEYS + _HF_KEYS) is not None:
+        return False
+    return not find_model_gguf_files(section)
 
 
 def _backfill_mtp(preset) -> bool:
@@ -336,14 +417,14 @@ def _backfill_mtp(preset) -> bool:
     enabled: list[str] = []
     dropped: list[str] = []
     # A sidecar that has not been probed against this binary costs a model
-    # load here, so say what is going on.
-    with console.status(
-        "Checking multi-token-prediction heads with this llama.cpp build…",
-        spinner="dots",
-    ):
-        for section in preset.sections():
-            if section == "*":
-                continue
+    # load here (about a minute for 87 GB), so name the model being checked.
+    with console.status("", spinner="dots") as status:
+        for section in all_model_ids(preset):
+            status.update(
+                "Checking multi-token-prediction heads with this llama.cpp "
+                f"build: [bold]{section}[/bold] [dim](a model with a separate "
+                "head is test-loaded, which can take a minute)[/dim]"
+            )
             if sync_mtp_param(section, preset):
                 enabled.append(section)
                 changed = True
@@ -384,12 +465,90 @@ def get_gguf_model_groups() -> list[list[str]]:
     return list(gguf_to_models.values())
 
 
+# Where models the router reported, but the preset does not define, come
+# from: a router started with someone else's preset file still says so in
+# each model's launch args.
+_router_sources: dict[str, tuple[str, str]] = {}
+
+_SOURCE_FLAGS = {
+    "-m": "path", "--model": "path",
+    "-hf": "hf", "-hfr": "hf", "--hf-repo": "hf",
+}
+
+
+def note_router_models(models: list[dict]) -> None:
+    """Remember the model file or HF repo behind each model the router lists."""
+    for m in models:
+        status = m.get("status")
+        args = status.get("args") if isinstance(status, dict) else None
+        if not isinstance(args, list):
+            continue
+        for flag, value in zip(args, args[1:]):
+            kind = _SOURCE_FLAGS.get(flag)
+            if kind is not None and isinstance(value, str):
+                _router_sources[m.get("id", "")] = (kind, value)
+                break
+
+
+_preset_cache: tuple[tuple, IniFile] | None = None
+
+
+def _current_preset() -> IniFile:
+    """The preset as on disk, parsed once per change to the file."""
+    global _preset_cache
+    path = preset_path()
+    try:
+        st = path.stat()
+        key = (str(path), st.st_mtime_ns, st.st_size)
+    except OSError:
+        key = (str(path),)
+    if _preset_cache is None or _preset_cache[0] != key:
+        _preset_cache = (key, IniFile.load(path))
+    return _preset_cache[1]
+
+
+def model_source(model_id: str) -> tuple[str, str]:
+    """Where a model's weights come from: ``("path", file)`` or ``("hf", repo)``.
+
+    A preset section can give a model any name and point it at a local file
+    or an HF repo. A model with neither is a cached HF model named by its
+    repo and quant.
+    """
+    preset = _current_preset()
+    if preset.has_section(model_id):
+        path = preset.get_any(model_id, _MODEL_KEYS)
+        if path:
+            return "path", path
+        repo = preset.get_any(model_id, _HF_KEYS)
+        if repo:
+            return "hf", repo
+    return _router_sources.get(model_id, ("hf", model_id))
+
+
+_SHARD_RE = re.compile(r"^(.*)-\d{5}-of-(\d{5})\.gguf$")
+
+
+def _local_gguf_files(path: Path) -> list[Path]:
+    """A local model file, with its sibling shards when it is split."""
+    m = _SHARD_RE.match(path.name)
+    if m:
+        shards = sorted(path.parent.glob(f"{m.group(1)}-*-of-{m.group(2)}.gguf"))
+        if shards:
+            return shards
+    return [path] if path.exists() else []
+
+
 def _snapshot_gguf_files(model_id: str, drafts: bool) -> list[Path]:
-    """List the model's cached GGUFs, either its own files or its sidecars."""
+    """List the model's GGUFs, either its own files or its sidecars."""
     files: list[Path] = []
     seen: set[Path] = set()
 
-    hf_dir = _hf_model_dir_for_id(model_id)
+    kind, source = model_source(model_id)
+    if kind == "path":
+        # llama.cpp finds a sidecar next to a local file by itself.
+        return [] if drafts else _local_gguf_files(Path(source).expanduser())
+
+    hf_dir = _hf_model_dir_for_id(source)
     if hf_dir is None:
         return files
     snapshots = hf_dir / "snapshots"
@@ -438,7 +597,8 @@ def find_model_mtp_file(model_id: str) -> Path | None:
 
 
 def _pick_model_draft(model_id: str, files: list[Path]) -> Path | None:
-    quant = model_id.rsplit(":", 1)[1] if ":" in model_id else ""
+    source = model_source(model_id)[1]
+    quant = source.rsplit(":", 1)[1] if ":" in source else ""
     chosen = pick_draft_file([str(f) for f in files], quant)
     return Path(chosen) if chosen is not None else None
 

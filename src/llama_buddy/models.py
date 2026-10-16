@@ -24,6 +24,10 @@ from llama_buddy.config import (
     get_gguf_model_groups,
     get_hf_hub_dir,
     is_draft_file,
+    key_names,
+    model_option,
+    model_source,
+    note_router_models,
     update_vram_usage,
 )
 from llama_buddy.console import console
@@ -182,6 +186,11 @@ def _detect_mtp(files: list[Path]) -> bool:
         return False
 
 
+def mtp_checked(model_id: str) -> bool:
+    """Whether llb has looked for this model's MTP head before."""
+    return model_id in _read_mtp_cache()
+
+
 @lru_cache(maxsize=64)
 def model_has_mtp(model_id: str) -> bool:
     """Check whether a model ships a multi-token-prediction head.
@@ -310,7 +319,7 @@ def sync_mtp_param(model_id: str, preset) -> bool:
     Returns True when the preset was changed. An existing ``spec-type`` is
     left alone, so turning MTP off in the settings editor sticks.
     """
-    if preset.has_option(model_id, "spec-type"):
+    if preset.get_any(model_id, key_names("spec-type")) is not None:
         return False
 
     if model_has_mtp(model_id):
@@ -333,14 +342,26 @@ def unwire_unloadable_sidecar(model_id: str, preset) -> bool:
     place, the setting would take the model down at start. Returns True
     when the preset was changed.
     """
-    if not preset.has_option(model_id, "spec-draft-model"):
+    names = key_names("spec-draft-model")
+    path = preset.get_any(model_id, names)
+    if path is None:
         return False
-    draft = Path(preset.get(model_id, "spec-draft-model"))
+    draft = Path(path).expanduser()
     if draft.is_file() and draft_model_loads(model_id, draft):
         return False
-    preset.remove_option(model_id, "spec-draft-model")
-    preset.remove_option(model_id, "spec-type")
+    preset.remove_options(model_id, names)
+    preset.remove_options(model_id, key_names("spec-type"))
     return True
+
+
+def _model_size(model_id: str, sizes: dict[str, int]) -> int:
+    """Size on disk of a model, whether cached from HF or a local file."""
+    kind, source = model_source(model_id)
+    if kind == "hf":
+        return sizes.get(source.split(":")[0], 0)
+    return sum(
+        f.stat().st_size for f in find_model_gguf_files(model_id) if f.exists()
+    )
 
 
 def _group_sort_key(
@@ -392,22 +413,22 @@ def _format_ctx(n: int) -> str:
     return f"{n:,}"
 
 
+def configured_ctx(preset, model_id: str) -> int:
+    """The context size the preset asks for, 0 meaning the model's own."""
+    try:
+        return int(model_option(preset, model_id, "c", "0"))
+    except ValueError:
+        return 0
+
+
 def _effective_ctx(
-    model_id: str, native_ctx: str, preset, global_ctx: int, pad: int = 0,
+    model_id: str, native_ctx: str, preset, pad: int = 0,
 ) -> str:
     """Build context display string: 'effective (native)' or just 'native'."""
     if not native_ctx or native_ctx == "-":
         return "-"
 
-    # Per-model override
-    model_ctx = 0
-    if preset.has_section(model_id):
-        try:
-            model_ctx = int(preset.get(model_id, "c", fallback="0"))
-        except ValueError:
-            pass
-
-    effective = model_ctx or global_ctx
+    effective = configured_ctx(preset, model_id)
     native_int = int(native_ctx.replace(",", ""))
     eff_fmt = _format_ctx(effective) if effective > 0 else ""
     native_fmt = _format_ctx(native_int)
@@ -422,11 +443,7 @@ def _mtp_cell(model_id: str, preset) -> str:
     """Render the MTP column: whether the head exists and whether it is used."""
     if not model_has_mtp(model_id) and find_model_mtp_file(model_id) is None:
         return "[dim]-[/dim]"
-    spec = (
-        preset.get(model_id, "spec-type", fallback="")
-        if preset.has_section(model_id)
-        else ""
-    )
+    spec = preset.get_any(model_id, key_names("spec-type"), "") or ""
     if "draft-mtp" in spec:
         return "[green]on[/green]"
     return "[dim]off[/dim]"
@@ -448,6 +465,7 @@ def list_models(port: int = DEFAULT_PORT, sort: str = "name") -> None:
 
         # Filter internal sections
         models = [m for m in models if m["id"] != "DEFAULT"]
+        note_router_models(models)
 
         sizes = compute_model_sizes()
         vram = update_vram_usage()
@@ -455,17 +473,11 @@ def list_models(port: int = DEFAULT_PORT, sort: str = "name") -> None:
         model_map = {m["id"]: m for m in models}
 
         from llama_buddy.config import read_preset
-        from llama_buddy.settings import load_settings
 
         preset = read_preset()
-        global_ctx = load_settings().ctx_size
 
         # Pre-fetch metadata for sorting
-        meta_cache: dict[str, dict[str, str]] = {}
-        for group in gguf_groups:
-            for mid in group:
-                if mid in model_map:
-                    meta_cache[mid] = get_model_meta(mid)
+        meta_cache = {mid: get_model_meta(mid) for mid in model_map}
 
         # Compute alignment padding for context column
         ctx_pad = 0
@@ -474,13 +486,7 @@ def list_models(port: int = DEFAULT_PORT, sort: str = "name") -> None:
             if native_str:
                 native_int = int(native_str.replace(",", ""))
                 ctx_pad = max(ctx_pad, len(_format_ctx(native_int)))
-                model_ctx = 0
-                if preset.has_section(mid):
-                    try:
-                        model_ctx = int(preset.get(mid, "c", fallback="0"))
-                    except ValueError:
-                        pass
-                eff = model_ctx or global_ctx
+                eff = configured_ctx(preset, mid)
                 if eff > 0:
                     ctx_pad = max(ctx_pad, len(_format_ctx(eff)))
 
@@ -508,7 +514,7 @@ def list_models(port: int = DEFAULT_PORT, sort: str = "name") -> None:
         meta = meta_cache.get(model_id) or get_model_meta(model_id)
         name = meta.get("name", model_id)
         native_ctx = meta.get("context_length", "-")
-        ctx_str = _effective_ctx(model_id, native_ctx, preset, global_ctx, ctx_pad)
+        ctx_str = _effective_ctx(model_id, native_ctx, preset, ctx_pad)
         aliases = m.get("aliases", [])
         alias = aliases[0] if aliases else ""
         model_status = m.get("status", {})
@@ -519,8 +525,7 @@ def list_models(port: int = DEFAULT_PORT, sort: str = "name") -> None:
         )
         status_str = _STATUS_STYLES.get(status_val, "[dim]unloaded[/dim]")
         mtp_str = _mtp_cell(model_id, preset)
-        base_repo = model_id.split(":")[0]
-        size = sizes.get(base_repo, 0)
+        size = _model_size(model_id, sizes)
         size_str = format_size(size) if size else "-"
         vram_mib = vram.get(model_id, 0.0)
         vram_str = _format_mib(vram_mib) if vram_mib else "-"

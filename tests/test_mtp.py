@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import configparser
 import struct
 
 import pytest
@@ -17,6 +16,7 @@ from llama_buddy.gguf import (
     mtp_tensor_name,
     read_scalar_metadata,
 )
+from llama_buddy.ini import IniFile
 from llama_buddy.models import _detect_mtp, _mtp_cell, sync_mtp_param
 
 
@@ -137,9 +137,7 @@ def test_detect_mtp_on_unreadable_file(tmp_path):
 
 @pytest.fixture
 def preset():
-    config = configparser.ConfigParser()
-    config.add_section("org/repo:Q8_0")
-    return config
+    return IniFile("[org/repo:Q8_0]\n")
 
 
 def test_sync_mtp_param_enables(monkeypatch, preset):
@@ -178,9 +176,9 @@ def test_mtp_cell_states(monkeypatch, preset):
 
 
 def test_mtp_cell_without_preset_section(monkeypatch):
-    """configparser raises NoSectionError even with a fallback."""
+    """Most cached models have no section at all."""
     monkeypatch.setattr(models, "model_has_mtp", lambda mid: True)
-    empty = configparser.ConfigParser()
+    empty = IniFile()
     assert "off" in _mtp_cell("org/repo:Q8_0", empty)
 
 
@@ -245,8 +243,7 @@ def test_backfill_runs_again_when_llama_server_changes(tmp_path, monkeypatch):
         models, "sync_mtp_param", lambda mid, p: (synced.append(mid), False)[1],
     )
     monkeypatch.setattr(models, "unwire_unloadable_sidecar", lambda mid, p: False)
-    preset = configparser.ConfigParser()
-    preset.add_section("org/repo:Q8_0")
+    preset = IniFile("[org/repo:Q8_0]\n")
 
     config._backfill_mtp(preset)
     config._backfill_mtp(preset)

@@ -18,7 +18,7 @@ Think of it as an ollama-like experience built on top of `llama-server`.
 ## Features
 
 - **Background server** &mdash; start/stop/restart `llama-server` as a daemon
-- **Multi-model routing** &mdash; preset-based configuration with automatic model load/unload
+- **Multi-model routing** &mdash; uses llama.cpp's own preset file, so nothing llb writes is llb-specific
 - **Interactive downloads** &mdash; search HuggingFace, pick a quant, download with progress and resume
 - **Rich terminal UI** &mdash; tables, panels, interactive selectors, and live search
 - **GGUF inspector** &mdash; view model metadata, architecture, and sampling parameters
@@ -28,7 +28,7 @@ Think of it as an ollama-like experience built on top of `llama-server`.
 - **Multi-token prediction** &mdash; models that ship an MTP head get speculative decoding switched on by themselves. A head shipped as a separate file is downloaded with the model and only wired in once the installed llama.cpp is confirmed to load it; the check runs again after every llama.cpp upgrade
 - **Idle sleeping** &mdash; `llama-server` releases the weights of a model after a configurable idle timeout
 - **VRAM tracking** &mdash; automatically parses server logs to show memory usage per model
-- **Auto-sync** &mdash; preset file stays in sync with the llama.cpp cache automatically
+- **Live changes** &mdash; downloads, removals and settings changes reload the running router's model list instead of restarting it
 
 ## Screenshots
 
@@ -145,22 +145,48 @@ llb stop
 | `llb info [model]` | Show GGUF metadata. Interactive selector when no model given. |
 | `llb info --apply-sampling [model]` | Write GGUF sampling params into the preset. All models when no model given. |
 | `llb props [model]` | Show active server sampling params for a loaded model. |
-| `llb settings` | Interactive editor for global and per-model settings. |
+| `llb settings` | Interactive editor for the preset's `[*]` section and per-model sections. |
 | `llb chat [model]` | Interactive chat via `llama-cli`. Model selector when no model given. |
 | `llb open` | Open the `llama-server` web UI in your browser. |
 | `llb logs` | Tail the server log file. |
 
 ## Configuration
 
-Config files live in `~/.config/llama/`:
+llb keeps no configuration format of its own. Settings live in llama.cpp's
+[preset file](https://github.com/ggml-org/llama.cpp/blob/master/docs/preset.md),
+which `llama-server --models-preset` reads, and the port lives in llama.cpp's
+`config.ini`. Anything llb writes works the same without llb.
 
 | File | Purpose |
 |------|---------|
-| `models.ini` | Model preset file &mdash; sections are HF repo IDs, auto-synced with cache |
-| `settings.json` | Global server settings (port, context size, GPU layers, etc.) |
-| `vram.json` | Cached per-model VRAM usage (parsed from server logs) |
-| `server.pid` | PID of the running server |
-| `server.log` | Server stdout/stderr |
+| `~/.config/llama/models.ini` | The preset file, unless you already have one (see below) |
+| `~/.config/llama.cpp/config.ini` | llama.cpp's own config; llb only writes `port` there, and only when it is not 8080 |
+
+The router lists every cached model by itself, so the preset only has a
+section for a model whose settings differ from the defaults. `[*]` holds the
+settings for all models; a model's own section overrides them. Defaults are
+llama-server's own: context from the model (shrunk to fit memory), no idle
+sleep. llb edits the file line by line, so comments and hand-written keys
+survive.
+
+### Using your own preset file
+
+If you already point llama-server at a preset, llb uses that one instead.
+It looks at `LLAMA_ARG_MODELS_PRESET`, then `models-preset` in
+`~/.config/llama.cpp/config.ini`. Sections can give a model any name and
+point it at an HF repo or a local file:
+
+```ini
+[*]
+sleep-idle-seconds = 300
+
+[coder]
+hf-repo = unsloth/Qwen3.8-27B-GGUF:Q8_0
+temp = 0.6
+
+[laguna]
+model = /data/models/laguna-s-2.1-Q4_K_M.gguf
+```
 
 ### Per-model settings
 
@@ -169,6 +195,11 @@ Run `llb settings` and select **Model Settings** to configure per-model override
 - Context size, GPU layers, flash attention
 - Custom aliases
 - Any `llama-server` parameter
+
+Other files in `~/.config/llama/` are llb's own state: `server.pid`,
+`server.log`, `models.effective.ini` (the copy the router reads, with context
+clamped to each model's maximum), and caches for VRAM usage, MTP detection
+and llama-server's flags.
 
 ## Development
 

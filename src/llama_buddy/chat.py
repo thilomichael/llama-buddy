@@ -7,49 +7,35 @@ import subprocess
 
 from llama_buddy.config import (
     find_model_gguf_files,
+    model_option,
+    model_source,
     read_preset,
     sync_preset_with_cache,
 )
 from llama_buddy.console import console
 from llama_buddy.select import select_model
-from llama_buddy.settings import load_settings
 
 
 def _build_settings_args(model_id: str) -> list[str]:
-    """Build llama-cli args from global + per-model settings."""
-    settings = load_settings()
+    """Build llama-cli args from the model's preset section and ``[*]``.
+
+    llama-cli does not read the preset, so the settings that matter for a
+    chat are passed on its command line.
+    """
     preset = read_preset()
-
-    # Per-model overrides (from INI)
-    def opt(key: str, default: str) -> str:
-        if not preset.has_section(model_id):
-            return default
-        return preset.get(model_id, key, fallback=default)
-
-    ctx = opt("c", "0")
-    ngl = opt("ngl", "auto")
-    fa = opt("fa", "auto")
-
     args: list[str] = []
 
-    # Context size: per-model override > global
-    ctx_val = int(ctx) if ctx != "0" else settings.ctx_size
-    if ctx_val > 0:
-        args.extend(["-c", str(ctx_val)])
+    ctx = model_option(preset, model_id, "c", "0")
+    if ctx not in ("0", ""):
+        args.extend(["-c", ctx])
 
-    # GPU layers: per-model override > global
-    ngl_val = ngl if ngl != "auto" else settings.gpu_layers
-    if ngl_val == "all":
-        args.extend(["-ngl", "999"])
-    elif ngl_val == "none":
-        args.extend(["-ngl", "0"])
-    elif ngl_val != "auto":
-        args.extend(["-ngl", ngl_val])
+    ngl = model_option(preset, model_id, "ngl", "auto")
+    if ngl != "auto":
+        args.extend(["-ngl", ngl])
 
-    # Flash attention: per-model override > global
-    fa_val = fa if fa != "auto" else settings.flash_attention
-    if fa_val == "on":
-        args.append("-fa")
+    fa = model_option(preset, model_id, "fa", "auto")
+    if fa != "auto":
+        args.extend(["-fa", fa])
 
     return args
 
@@ -74,7 +60,8 @@ def chat(model_id: str | None = None, extra_args: list[str] | None = None) -> No
     if gguf_files:
         cmd = [llama_cli, "-m", str(gguf_files[0]), "--conversation"]
     else:
-        cmd = [llama_cli, "--hf-repo", model_id, "--conversation"]
+        repo = model_source(model_id)[1]
+        cmd = [llama_cli, "--hf-repo", repo, "--conversation"]
 
     settings_args = _build_settings_args(model_id)
     cmd.extend(settings_args)

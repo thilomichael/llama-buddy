@@ -9,11 +9,13 @@ import signal
 import subprocess
 import time
 
+import httpx
+
 from llama_buddy.config import (
     CONFIG_DIR,
     LOG_FILE,
-    PRESET_FILE,
     ensure_config_dir,
+    get_port,
     read_pid,
     remove_pid,
     write_pid,
@@ -79,46 +81,69 @@ def _remove_stale_watchdog() -> None:
 EFFECTIVE_PRESET_FILE = CONFIG_DIR / "models.effective.ini"
 
 
-def _build_effective_preset(global_ctx: int) -> None:
-    """Write a copy of the preset with per-model context clamped to native max.
+def _build_effective_preset() -> None:
+    """Write the copy of the preset that the router actually reads.
 
-    llama-server allocates KV cache based on ctx-size even when the model's
-    native context is smaller, wasting VRAM. This writes clamped ``c`` values
-    into a temporary INI so the user's preset stays untouched.
+    Two things differ from the user's file. Context is clamped to each
+    model's native maximum, since llama-server allocates KV cache for the
+    full ctx-size even past what the model was trained on. And settings the
+    installed llama-server does not know are dropped: it refuses to start on
+    an unknown flag or value, which would take every model down rather than
+    lose one setting.
     """
-    import io
-
-    from llama_buddy.config import read_preset
-    from llama_buddy.models import get_model_meta
+    from llama_buddy.config import all_model_ids, key_names, read_preset
+    from llama_buddy.models import configured_ctx, get_model_meta
 
     preset = read_preset()
 
-    if global_ctx > 0:
-        for section in preset.sections():
-            if section in ("DEFAULT", "*"):
-                continue
-            meta = get_model_meta(section)
-            native_str = meta.get("context_length", "")
-            if not native_str:
-                continue
-            native = int(native_str.replace(",", ""))
-            try:
-                model_ctx = int(preset.get(section, "c", fallback="0"))
-            except ValueError:
-                model_ctx = 0
-            effective = model_ctx or global_ctx
-            if effective > native:
-                preset.set(section, "c", str(native))
+    for model_id in all_model_ids(preset):
+        ctx = configured_ctx(preset, model_id)
+        if ctx <= 0:
+            continue
+        native_str = get_model_meta(model_id).get("context_length", "")
+        if not native_str:
+            continue
+        native = int(native_str.replace(",", ""))
+        if ctx > native:
+            preset.remove_options(model_id, key_names("c"))
+            preset.set(model_id, "c", str(native))
 
-    buf = io.StringIO()
-    preset.write(buf)
+    _drop_unsupported(preset)
+
     ensure_config_dir()
-    EFFECTIVE_PRESET_FILE.write_text(buf.getvalue())
+    EFFECTIVE_PRESET_FILE.write_text(preset.text())
+
+
+def _drop_unsupported(preset) -> None:
+    """Remove settings the installed llama-server would refuse to start on."""
+    from llama_buddy.capabilities import has_flag, has_value
+    from llama_buddy.config import key_names
+    from llama_buddy.settings import GLOBAL_SETTING_META, MODEL_SETTING_META
+
+    flags = {
+        name: meta["flag"]
+        for key, meta in {**GLOBAL_SETTING_META, **MODEL_SETTING_META}.items()
+        if "flag" in meta
+        for name in key_names(key)
+    }
+    ngl_names = key_names("ngl")
+    for section in preset.sections():
+        for key in preset.options(section):
+            # Older llb offered "none", which llama-server cannot parse.
+            if key in ngl_names and preset.get(section, key) == "none":
+                preset.set(section, key, "0")
+            flag = flags.get(key)
+            if flag is None:
+                continue
+            value = preset.get(section, key, "")
+            if not has_flag(flag) or (
+                flag in ("--load-mode", "--lazy-mode")
+                and not has_value(flag, value)
+            ):
+                preset.remove_option(section, key)
 
 
 def start(extra_args: list[str] | None = None) -> None:
-    from llama_buddy.settings import load_settings
-
     pid = read_pid()
     if pid is not None and is_process_running(pid):
         console.print(
@@ -135,23 +160,19 @@ def start(extra_args: list[str] | None = None) -> None:
         )
         raise SystemExit(1)
 
-    if not PRESET_FILE.exists():
-        console.print(f"No preset file at {PRESET_FILE}", style="red")
-        console.print(
-            "Add models first with: [bold]llb download <model>[/bold]"
-        )
-        raise SystemExit(1)
-
-    settings = load_settings()
     ensure_config_dir()
     _remove_stale_watchdog()
-    _build_effective_preset(settings.ctx_size)
+    _build_effective_preset()
     _save_extra_args(extra_args)
 
     log_fh = open(LOG_FILE, "a")
 
-    cmd = [binary, "--models-preset", str(EFFECTIVE_PRESET_FILE)]
-    cmd.extend(settings.to_server_args())
+    # Model settings travel in the preset: a flag given here would override
+    # the same setting in every model's section.
+    cmd = [
+        binary, "--models-preset", str(EFFECTIVE_PRESET_FILE),
+        "--port", str(get_port()),
+    ]
     if extra_args:
         cmd.extend(extra_args)
 
@@ -217,6 +238,42 @@ def restart_if_running() -> None:
     if is_running():
         console.print("Restarting llama-server…", style="dim")
         restart()
+
+
+def reload_if_running() -> None:
+    """Make a running router pick up changes to the preset and the cache.
+
+    ``GET /models?reload=1`` re-reads every model source in place: models
+    whose settings changed are unloaded and come back with the new ones on
+    their next request, the rest keep running. A router that predates it
+    is restarted instead, if llb started it. A router started some other
+    way reads the user's preset directly and only needs the reload.
+    """
+    managed = is_running()
+    if managed:
+        _build_effective_preset()
+    url = f"http://localhost:{get_port()}/models"
+    try:
+        models = httpx.get(url, timeout=5).json().get("data", [])
+    except (httpx.HTTPError, ValueError):
+        if managed:
+            restart_if_running()
+        return
+    # The source field came with the model management API (June 2026),
+    # a month after ?reload=1; an older router ignores the parameter.
+    if any("source" in m for m in models):
+        try:
+            httpx.get(url, params={"reload": 1}, timeout=30).raise_for_status()
+            console.print("Reloaded llama-server's models.", style="dim")
+            return
+        except httpx.HTTPError:
+            pass
+    if managed:
+        restart_if_running()
+    else:
+        console.print(
+            "Restart llama-server to apply the change.", style="yellow",
+        )
 
 
 def status() -> None:

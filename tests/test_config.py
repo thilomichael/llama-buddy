@@ -4,11 +4,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from llama_buddy.config import (
+    all_model_ids,
     find_model_gguf_files,
     find_model_mtp_file,
     get_hf_hub_dir,
+    llama_config_file,
+    model_option,
+    model_source,
+    note_router_models,
     parse_vram_from_log,
+    preset_path,
     read_pid,
     read_preset,
     read_vram_usage,
@@ -19,6 +27,7 @@ from llama_buddy.config import (
     write_pid,
     write_preset,
 )
+from llama_buddy.ini import IniFile
 
 
 def test_pid_roundtrip(tmp_path, monkeypatch):
@@ -121,56 +130,174 @@ def _make_hf_model(hf_dir, org, repo, filename):
     (refs / "main").write_text("abc123")
 
 
-def test_sync_preset_with_cache(tmp_path, monkeypatch):
-    preset_file = tmp_path / "models.ini"
+@pytest.fixture
+def hub(tmp_path, monkeypatch):
+    """An HF cache, with MTP detection out of the way."""
+    import llama_buddy.models as models
+
     hf_dir = tmp_path / "hf_hub"
     hf_dir.mkdir()
-    monkeypatch.setattr("llama_buddy.config.PRESET_FILE", preset_file)
-    monkeypatch.setattr("llama_buddy.config.CONFIG_DIR", tmp_path)
-    monkeypatch.setattr(
-        "llama_buddy.config.MTP_BACKFILL_FILE", tmp_path / "mtp_backfill_done"
-    )
     monkeypatch.setattr("llama_buddy.config.get_hf_hub_dir", lambda: hf_dir)
-
-    # Create an existing preset with one model
-    config = read_preset()
-    config.add_section("org/model-GGUF:Q4_K_M")
-    write_preset(config)
-
-    # Create HF hub entries: one matching existing, one new
-    _make_hf_model(hf_dir, "org", "model-GGUF", "model-Q4_K_M.gguf")
-    _make_hf_model(hf_dir, "other", "newmodel-GGUF", "newmodel-Q8_0.gguf")
-
-    added = sync_preset_with_cache()
-
-    assert "other/newmodel-GGUF:Q8_0" in added
-    assert len(added) == 1
-
-    # Verify it's in the preset now
-    config2 = read_preset()
-    assert "other/newmodel-GGUF:Q8_0" in config2.sections()
+    monkeypatch.setattr("llama_buddy.config._backfill_mtp", lambda preset: False)
+    monkeypatch.setattr(models, "model_has_mtp", lambda mid: False)
+    monkeypatch.setattr(models, "find_model_mtp_file", lambda mid: None)
+    return hf_dir
 
 
-def test_sync_preset_no_duplicates(tmp_path, monkeypatch):
-    preset_file = tmp_path / "models.ini"
-    hf_dir = tmp_path / "hf_hub"
+def test_sync_adds_no_sections_for_cached_models(hub):
+    _make_hf_model(hub, "org", "model-GGUF", "model-Q4_K_M.gguf")
+
+    sync_preset_with_cache()
+
+    assert read_preset().sections() == []
+    assert all_model_ids() == ["org/model-GGUF:Q4_K_M"]
+
+
+def test_sync_drops_empty_sections(hub):
+    _make_hf_model(hub, "org", "model-GGUF", "model-Q4_K_M.gguf")
+    preset = IniFile(
+        "version = 1\n\n[*]\n\n[org/model-GGUF:Q4_K_M]\n\n"
+        "[org/model-GGUF:Q4_K_M-tuned]\nhf-repo = org/model-GGUF:Q4_K_M\n"
+    )
+    write_preset(preset)
+
+    sync_preset_with_cache()
+
+    assert read_preset().text() == (
+        "version = 1\n\n"
+        "[org/model-GGUF:Q4_K_M-tuned]\nhf-repo = org/model-GGUF:Q4_K_M\n"
+    )
+
+
+def test_sync_drops_settings_for_removed_models(hub):
+    write_preset(IniFile("[org/gone-GGUF:Q4_K_M]\ntemp = 0.7\n"))
+    sync_preset_with_cache()
+    assert read_preset().sections() == []
+
+
+def test_sync_keeps_sections_that_bring_their_own_model(hub):
+    text = (
+        "; named presets\n[laguna]\nmodel = /models/laguna-Q4_K_M.gguf\n\n"
+        "[org/missing-GGUF:Q8_0]\nhf-repo = org/missing-GGUF:Q8_0\n\n"
+        "[local-file]\ntemp = 0.5\n"
+    )
+    write_preset(IniFile(text))
+    sync_preset_with_cache()
+    assert read_preset().text() == text
+
+
+def test_sync_enables_mtp_once_per_new_model(hub, monkeypatch):
+    import llama_buddy.models as models
+
+    _make_hf_model(hub, "org", "model-GGUF", "model-Q4_K_M.gguf")
+    seen: list[str] = []
+
+    def fake_sync(mid, preset):
+        seen.append(mid)
+        models._read_mtp_cache()[mid] = {"mtp": True}
+        preset.set(mid, "spec-type", "draft-mtp")
+        return True
+
+    monkeypatch.setattr(models, "sync_mtp_param", fake_sync)
+
+    assert sync_preset_with_cache() == ["org/model-GGUF:Q4_K_M"]
+    assert read_preset().get("org/model-GGUF:Q4_K_M", "spec-type") == "draft-mtp"
+
+    # Turning it off by removing the key sticks: the model has been seen.
+    preset = read_preset()
+    preset.remove_option("org/model-GGUF:Q4_K_M", "spec-type")
+    write_preset(preset)
+    assert sync_preset_with_cache() == []
+    assert seen == ["org/model-GGUF:Q4_K_M"]
+
+
+# ---------------------------------------------------------------------------
+# Where the preset lives and what its sections point at
+# ---------------------------------------------------------------------------
+
+
+def test_preset_path_defaults_to_llb_file(tmp_path):
+    import llama_buddy.config as config
+
+    assert preset_path() == config.PRESET_FILE
+
+
+def test_preset_path_from_environment(monkeypatch, tmp_path):
+    monkeypatch.setenv("LLAMA_ARG_MODELS_PRESET", str(tmp_path / "mine.ini"))
+    assert preset_path() == tmp_path / "mine.ini"
+
+
+def test_preset_path_from_config_ini(tmp_path):
+    cfg = llama_config_file()
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text(f"models-preset = {tmp_path}/presets.ini ; hand-made\n")
+    assert preset_path() == tmp_path / "presets.ini"
+
+
+def test_named_section_resolves_local_file(tmp_path):
+    gguf = tmp_path / "laguna-s-2.1-Q4_K_M.gguf"
+    gguf.write_bytes(b"x" * 10)
+    write_preset(IniFile(f"[laguna]\nm = {gguf}\n"))
+
+    assert model_source("laguna") == ("path", str(gguf))
+    assert find_model_gguf_files("laguna") == [gguf]
+    assert find_model_mtp_file("laguna") is None
+
+
+def test_named_section_resolves_local_shards(tmp_path):
+    shards = [tmp_path / f"big-Q4_K_M-0000{i}-of-00003.gguf" for i in (1, 2, 3)]
+    for shard in shards:
+        shard.write_bytes(b"x")
+    write_preset(IniFile(f"[big]\nmodel = {shards[0]}\n"))
+
+    assert find_model_gguf_files("big") == shards
+
+
+def test_named_section_resolves_hf_repo(tmp_path, monkeypatch):
+    hf_dir = tmp_path / "hub"
     hf_dir.mkdir()
-    monkeypatch.setattr("llama_buddy.config.PRESET_FILE", preset_file)
-    monkeypatch.setattr("llama_buddy.config.CONFIG_DIR", tmp_path)
-    monkeypatch.setattr(
-        "llama_buddy.config.MTP_BACKFILL_FILE", tmp_path / "mtp_backfill_done"
-    )
     monkeypatch.setattr("llama_buddy.config.get_hf_hub_dir", lambda: hf_dir)
+    _make_hf_model(hf_dir, "org", "model-GGUF", "model-Q4_K_M.gguf")
+    write_preset(IniFile("[fast]\nhf = org/model-GGUF:Q4_K_M\n"))
 
+    files = find_model_gguf_files("fast")
+    assert [f.name for f in files] == ["model-Q4_K_M.gguf"]
+
+
+def test_router_args_resolve_models_the_preset_does_not_know(tmp_path):
+    gguf = tmp_path / "x-Q8_0.gguf"
+    gguf.write_bytes(b"x")
+    note_router_models([
+        {"id": "x", "status": {"args": ["llama-server", "--model", str(gguf)]}},
+        {"id": "y", "status": {"args": ["llama-server", "-hf", "org/y-GGUF:Q8_0"]}},
+        {"id": "z", "status": "unloaded"},
+    ])
+    assert find_model_gguf_files("x") == [gguf]
+    assert model_source("y") == ("hf", "org/y-GGUF:Q8_0")
+    assert model_source("z") == ("hf", "z")
+
+
+def test_resolve_model_finds_cached_model_without_section(tmp_path, monkeypatch):
+    hf_dir = tmp_path / "hub"
+    hf_dir.mkdir()
+    monkeypatch.setattr("llama_buddy.config.get_hf_hub_dir", lambda: hf_dir)
     _make_hf_model(hf_dir, "org", "model-GGUF", "model-Q4_K_M.gguf")
 
-    # First sync adds it
-    added1 = sync_preset_with_cache()
-    assert len(added1) == 1
+    assert resolve_model("org/model-GGUF:Q4_K_M") == "org/model-GGUF:Q4_K_M"
+    assert resolve_model("ORG/model-gguf:q4_k_m") == "org/model-GGUF:Q4_K_M"
 
-    # Second sync should find nothing new
-    added2 = sync_preset_with_cache()
-    assert len(added2) == 0
+
+def test_resolve_model_by_any_alias():
+    write_preset(IniFile("[laguna]\nmodel = /x.gguf\na = lag, coder\n"))
+    assert resolve_model("coder") == "laguna"
+    assert resolve_model("LAG") == "laguna"
+
+
+def test_model_option_falls_back_to_star():
+    preset = IniFile("[*]\nctx-size = 8192\n\n[m]\nfa = on\n")
+    assert model_option(preset, "m", "c") == "8192"
+    assert model_option(preset, "m", "fa") == "on"
+    assert model_option(preset, "other", "fa", "auto") == "auto"
 
 
 # ---------------------------------------------------------------------------

@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import configparser
 from pathlib import Path
 
 import pytest
 
 from llama_buddy import download, models
 from llama_buddy.config import is_draft_file, pick_draft_file
+from llama_buddy.ini import IniFile
 
 
 def test_is_draft_file_recognises_prefixes():
@@ -135,9 +135,7 @@ def test_fetch_repo_files_is_cached(monkeypatch):
 
 @pytest.fixture
 def preset():
-    config = configparser.ConfigParser()
-    config.add_section("org/repo:Q8_0")
-    return config
+    return IniFile("[org/repo:Q8_0]\n")
 
 
 def test_sync_mtp_param_writes_sidecar_path(monkeypatch, preset, tmp_path):

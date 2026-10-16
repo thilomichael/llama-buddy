@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import subprocess
 
-from llama_buddy.config import LOG_FILE, sync_preset_with_cache
+from llama_buddy.config import LOG_FILE, get_port, sync_preset_with_cache
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -144,31 +144,30 @@ def _run(argv: list[str] | None = None) -> None:
 
     elif args.command == "models":
         from llama_buddy.models import list_models
-        from llama_buddy.settings import load_settings
 
-        list_models(port=load_settings().port, sort=args.sort)
+        list_models(port=get_port(), sort=args.sort)
 
     elif args.command == "download":
         from llama_buddy.download import download
-        from llama_buddy.server import restart_if_running
+        from llama_buddy.server import reload_if_running
 
         download(args.model or None, args.alias)
-        restart_if_running()
+        reload_if_running()
 
     elif args.command == "remove":
         from llama_buddy.download import remove
-        from llama_buddy.server import restart_if_running
+        from llama_buddy.server import reload_if_running
 
         remove(args.model or None, args.keep_files)
-        restart_if_running()
+        reload_if_running()
 
     elif args.command == "info":
         if args.apply_sampling:
             from llama_buddy.info import apply_sampling
-            from llama_buddy.server import restart_if_running
+            from llama_buddy.server import reload_if_running
 
             apply_sampling(args.model or None)
-            restart_if_running()
+            reload_if_running()
         else:
             model = args.model
             if model is None:
@@ -190,19 +189,18 @@ def _run(argv: list[str] | None = None) -> None:
     elif args.command == "open":
         import webbrowser
 
-        from llama_buddy.settings import load_settings
-
-        port = load_settings().port
-        url = f"http://localhost:{port}"
+        url = f"http://localhost:{get_port()}"
         print(f"Opening {url}")
         webbrowser.open(url)
 
     elif args.command == "settings":
-        from llama_buddy.server import restart_if_running
+        from llama_buddy.server import reload_if_running, restart_if_running
         from llama_buddy.settings import edit_settings
 
-        edit_settings()
-        restart_if_running()
+        if edit_settings():
+            restart_if_running()
+        else:
+            reload_if_running()
 
     elif args.command == "props":
         from llama_buddy.props import show_props
@@ -211,9 +209,8 @@ def _run(argv: list[str] | None = None) -> None:
         if model is None:
             from llama_buddy.props import get_loaded_model_ids
             from llama_buddy.select import select_model
-            from llama_buddy.settings import load_settings
 
-            loaded = get_loaded_model_ids(load_settings().port)
+            loaded = get_loaded_model_ids(get_port())
             if not loaded:
                 from llama_buddy.console import console
 

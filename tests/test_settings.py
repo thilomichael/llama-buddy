@@ -1,124 +1,190 @@
-"""Tests for settings management."""
+"""Tests for settings: the preset's [*] section, the port and migration."""
 
 from __future__ import annotations
 
 import json
 
-from llama_buddy.settings import Settings, load_settings, save_settings
+import llama_buddy.settings as settings
+from llama_buddy.config import get_port, llama_config_file, read_preset, set_port
+from llama_buddy.ini import IniFile
+from llama_buddy.server import _drop_unsupported
+from llama_buddy.settings import migrate_settings_file
 
 
-def test_default_settings():
-    s = Settings()
-    assert s.port == 8080
-    assert s.idle_timeout == 300
-    assert s.jinja is True
-    assert s.flash_attention == "auto"
-    assert s.ctx_size == 8192
-    assert s.gpu_layers == "auto"
+def _migrate(data: dict | str, preset: IniFile | None = None) -> IniFile:
+    settings.SETTINGS_FILE.write_text(
+        data if isinstance(data, str) else json.dumps(data)
+    )
+    preset = preset or IniFile()
+    migrate_settings_file(preset)
+    return preset
 
 
-def test_settings_roundtrip(tmp_path, monkeypatch):
-    settings_file = tmp_path / "settings.json"
-    monkeypatch.setattr("llama_buddy.settings.SETTINGS_FILE", settings_file)
-    monkeypatch.setattr("llama_buddy.settings.CONFIG_DIR", tmp_path)
-
-    s = Settings(port=9090, idle_timeout=600, jinja=False)
-    save_settings(s)
-
-    loaded = load_settings()
-    assert loaded.port == 9090
-    assert loaded.idle_timeout == 600
-    assert loaded.jinja is False
-    assert loaded.flash_attention == "auto"
+def test_port_defaults_to_8080():
+    assert get_port() == 8080
 
 
-def test_settings_ignores_unknown_keys(tmp_path, monkeypatch):
-    settings_file = tmp_path / "settings.json"
-    settings_file.write_text(json.dumps({"port": 9090, "unknown_key": "val"}))
-    monkeypatch.setattr("llama_buddy.settings.SETTINGS_FILE", settings_file)
-
-    loaded = load_settings()
-    assert loaded.port == 9090
+def test_port_from_config_ini():
+    path = llama_config_file()
+    path.parent.mkdir(parents=True)
+    path.write_text("; mine\nport = 9090\n")
+    assert get_port() == 9090
 
 
-def test_settings_corrupt_file(tmp_path, monkeypatch):
-    settings_file = tmp_path / "settings.json"
-    settings_file.write_text("not json")
-    monkeypatch.setattr("llama_buddy.settings.SETTINGS_FILE", settings_file)
-
-    loaded = load_settings()
-    assert loaded.port == 8080  # falls back to defaults
+def test_port_env_wins(monkeypatch):
+    set_port(9090)
+    monkeypatch.setenv("LLAMA_ARG_PORT", "7070")
+    assert get_port() == 7070
 
 
-def test_to_server_args():
-    s = Settings(port=9090, idle_timeout=600, jinja=False, ctx_size=4096)
-    args = s.to_server_args()
-    assert "--port" in args
-    assert "9090" in args
-    assert "--sleep-idle-seconds" in args
-    assert "600" in args
-    assert "--no-jinja" in args
-    assert "--ctx-size" in args
-    assert "4096" in args
+def test_set_port_keeps_the_rest_of_config_ini():
+    path = llama_config_file()
+    path.parent.mkdir(parents=True)
+    path.write_text("; shared by all llama.cpp tools\nthreads = 8\n")
+    set_port(9090)
+    assert path.read_text() == (
+        "; shared by all llama.cpp tools\nthreads = 8\nport = 9090\n"
+    )
+    set_port(8080)
+    assert path.read_text() == "; shared by all llama.cpp tools\nthreads = 8\n"
 
 
-def test_to_server_args_default_ctx():
-    s = Settings()
-    args = s.to_server_args()
-    assert "--ctx-size" in args
-    assert "8192" in args
+def test_default_port_does_not_create_config_ini():
+    set_port(8080)
+    assert not llama_config_file().exists()
 
 
-def test_idle_timeout_zero_is_migrated(tmp_path, monkeypatch):
-    """llama-server refuses to start on --sleep-idle-seconds 0."""
-    settings_file = tmp_path / "settings.json"
-    settings_file.write_text(json.dumps({"idle_timeout": 0}))
-    monkeypatch.setattr("llama_buddy.settings.SETTINGS_FILE", settings_file)
+def test_migration_keeps_only_non_default_values():
+    preset = _migrate({
+        "port": 8080, "idle_timeout": 300, "jinja": True,
+        "flash_attention": "auto", "ctx_size": 0, "gpu_layers": "auto",
+    })
+    assert preset.options("*") == ["sleep-idle-seconds"]
+    assert preset.get("*", "sleep-idle-seconds") == "300"
 
-    loaded = load_settings()
-    assert loaded.idle_timeout == -1
+
+def test_migration_removes_settings_json():
+    _migrate({"port": 8080})
+    assert not settings.SETTINGS_FILE.exists()
 
 
-def test_never_sleep_passes_minus_one():
-    args = Settings(idle_timeout=-1).to_server_args()
-    assert args[args.index("--sleep-idle-seconds") + 1] == "-1"
+def test_migration_moves_port_to_config_ini():
+    _migrate({"port": 9090})
+    assert get_port() == 9090
+
+
+def test_migration_fills_in_old_defaults():
+    """A field missing from settings.json got llb's old default."""
+    preset = _migrate({"port": 8080})
+    assert preset.get("*", "sleep-idle-seconds") == "300"
+    assert preset.get("*", "c") == "8192"
+
+
+def test_migration_overrides_star_section():
+    """The settings were router flags, which beat [*] before."""
+    preset = IniFile("[*]\nc = 0\nctx-size = 4096\n")
+    _migrate({"ctx_size": 8192, "jinja": False}, preset)
+    assert preset.get("*", "c") == "8192"
+    assert preset.get("*", "ctx-size") is None
+    assert preset.get("*", "jinja") == "false"
+
+
+def test_migration_turns_zero_idle_timeout_into_never():
+    preset = _migrate({"idle_timeout": 0})
+    assert preset.get("*", "sleep-idle-seconds") is None
+
+
+def test_migration_survives_corrupt_file():
+    preset = _migrate("not json")
+    assert preset.get("*", "c") == "8192"
+    assert not settings.SETTINGS_FILE.exists()
+
+
+def test_sync_runs_the_migration(monkeypatch, tmp_path):
+    import llama_buddy.config as config
+
+    monkeypatch.setattr(config, "get_hf_hub_dir", lambda: tmp_path / "hub")
+    monkeypatch.setattr(
+        config, "MTP_BACKFILL_FILE", tmp_path / "mtp_backfill_done"
+    )
+    monkeypatch.setattr(config, "_backfill_mtp", lambda preset: False)
+    settings.SETTINGS_FILE.write_text(json.dumps({"idle_timeout": 600}))
+
+    config.sync_preset_with_cache()
+
+    assert read_preset().get("*", "sleep-idle-seconds") == "600"
 
 
 def _allow(monkeypatch, flags=True, values=True):
     monkeypatch.setattr(
-        "llama_buddy.settings.has_flag",
+        "llama_buddy.capabilities.has_flag",
         flags if callable(flags) else (lambda flag: flags),
     )
     monkeypatch.setattr(
-        "llama_buddy.settings.has_value",
+        "llama_buddy.capabilities.has_value",
         values if callable(values) else (lambda flag, value: values),
     )
 
 
-def test_unsupported_flags_are_left_out(monkeypatch):
+def test_unsupported_flags_are_dropped(monkeypatch):
     _allow(monkeypatch, flags=lambda flag: flag == "--load-mode")
-    args = Settings(kv_unified_per_slot=4096).to_server_args()
-    assert "--load-mode" in args
-    assert "--lazy-mode" not in args
-    assert "--kv-unified-per-slot" not in args
+    preset = IniFile(
+        "[*]\nload-mode = mmap\nlazy-mode = on\nkv-unified-per-slot = 4096\n"
+        "[org/m:Q4]\nspec-type = draft-mtp\nc = 4096\n"
+    )
+    _drop_unsupported(preset)
+    assert preset.options("*") == ["load-mode"]
+    assert preset.options("org/m:Q4") == ["c"]
 
 
-def test_unsupported_value_is_left_out(monkeypatch):
+def test_unsupported_value_is_dropped(monkeypatch):
     """Build 10344 has --load-mode but rejects 'auto'; the build default wins."""
     _allow(monkeypatch, values=lambda flag, value: value != "auto")
-    args = Settings(load_mode="auto", lazy_mode="off").to_server_args()
-    assert "--load-mode" not in args
-    assert args[args.index("--lazy-mode") + 1] == "off"
+    preset = IniFile("[*]\nlm = auto\nlazy-mode = off\n")
+    _drop_unsupported(preset)
+    assert preset.options("*") == ["lazy-mode"]
 
 
-def test_supported_flags_are_emitted(monkeypatch):
+def test_supported_settings_are_kept(monkeypatch):
     _allow(monkeypatch)
-    args = Settings(kv_unified_per_slot=4096).to_server_args()
-    assert args[args.index("--load-mode") + 1] == "auto"
-    assert args[args.index("--lazy-mode") + 1] == "auto"
-    assert args[args.index("--kv-unified-per-slot") + 1] == "4096"
+    text = "[*]\nload-mode = auto\nkv-unified-per-slot = 4096\n"
+    preset = IniFile(text)
+    _drop_unsupported(preset)
+    assert preset.text() == text
 
 
-def test_kv_unified_per_slot_unset_is_omitted(monkeypatch):
+def test_start_passes_no_model_settings(monkeypatch, tmp_path):
+    """Router flags override every model's section, so none are passed."""
+    import llama_buddy.server as server
+
+    calls = []
+    monkeypatch.setattr(server, "read_pid", lambda: None)
+    monkeypatch.setattr(server, "find_server_binary", lambda: "/bin/llama-server")
+    monkeypatch.setattr(server, "LOG_FILE", tmp_path / "server.log")
+    monkeypatch.setattr(server, "EFFECTIVE_PRESET_FILE", tmp_path / "eff.ini")
+    monkeypatch.setattr(server, "_build_effective_preset", lambda: None)
+    monkeypatch.setattr(server, "_remove_stale_watchdog", lambda: None)
+    monkeypatch.setattr(server, "_save_extra_args", lambda args: None)
+    monkeypatch.setattr(server, "write_pid", lambda pid: None)
+    monkeypatch.setattr(
+        server.subprocess, "Popen",
+        lambda cmd, **kw: calls.append(cmd) or type("P", (), {"pid": 1})(),
+    )
+    set_port(9090)
+
+    server.start(["--host", "0.0.0.0"])
+
+    assert calls == [[
+        "/bin/llama-server", "--models-preset", str(tmp_path / "eff.ini"),
+        "--port", "9090", "--host", "0.0.0.0",
+    ]]
+
+
+def test_gpu_layers_none_becomes_zero(monkeypatch):
+    """llama-server parses --gpu-layers as auto, all or a number."""
     _allow(monkeypatch)
-    assert "--kv-unified-per-slot" not in Settings().to_server_args()
+    preset = IniFile("[*]\nngl = none\n[m]\nn-gpu-layers = none\n")
+    _drop_unsupported(preset)
+    assert preset.get("*", "ngl") == "0"
+    assert preset.get("m", "n-gpu-layers") == "0"
+    assert _migrate({"gpu_layers": "none"}).get("*", "ngl") == "0"

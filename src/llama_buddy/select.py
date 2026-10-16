@@ -5,7 +5,12 @@ from __future__ import annotations
 from rich.live import Live
 from rich.text import Text
 
-from llama_buddy.config import get_model_groups, read_preset
+from llama_buddy.config import (
+    all_model_ids,
+    get_model_groups,
+    read_preset,
+    section_aliases,
+)
 from llama_buddy.console import console
 from llama_buddy.models import get_model_name
 from llama_buddy.tui import read_key, require_tty
@@ -58,14 +63,13 @@ def _render_menu(
 
 
 def get_model_entries() -> list[tuple[str, str, str]]:
-    """Get sorted list of (model_id, display_name, alias) from preset file."""
+    """Get sorted list of (model_id, display_name, alias) for every model."""
     preset = read_preset()
-    sections = [s for s in preset.sections() if s != "*"]
     entries: list[tuple[str, str, str]] = []
-    for section in sections:
-        name = get_model_name(section) or section
-        alias = preset.get(section, "alias", fallback="")
-        entries.append((section, name, alias))
+    for model_id in all_model_ids(preset):
+        name = get_model_name(model_id) or model_id
+        alias = ", ".join(section_aliases(preset, model_id))
+        entries.append((model_id, name, alias))
     entries.sort(key=lambda e: e[1].lower())
     return entries
 
@@ -87,7 +91,7 @@ def select_model(
     title: str = "Select a model",
     allowed_ids: set[str] | None = None,
 ) -> str:
-    """Show an interactive menu to pick a model from the preset file.
+    """Show an interactive menu to pick a model.
 
     If *allowed_ids* is given, only models whose section name is in the set
     are shown.  Returns the model ID (preset section name).

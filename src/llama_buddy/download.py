@@ -23,12 +23,15 @@ from rich.progress import (
 from rich.text import Text
 
 from llama_buddy.config import (
+    all_model_ids,
     find_model_draft_file,
     find_model_gguf_files,
     find_model_mtp_file,
     get_hf_hub_dir,
     hf_model_dir,
     is_draft_file,
+    key_names,
+    model_source,
     pick_draft_file,
     read_preset,
     resolve_model,
@@ -1090,17 +1093,12 @@ def download(model_id: str | None = None, alias: str | None = None) -> None:
     if not model_has_mtp(model_id):
         _download_mtp_sidecar(repo_id, quant, org, repo_name, model_id)
 
-    # Add to preset (if not already there)
+    # The router lists cached models by itself; the preset only gets a
+    # section when something about this model differs from the defaults.
     preset = read_preset()
-    is_new = model_id not in preset
-    if is_new:
-        if not preset.has_section("*"):
-            preset.add_section("*")
-            preset.set("*", "c", "0")
-
-        preset.add_section(model_id)
-        if alias is not None:
-            preset.set(model_id, "alias", alias)
+    if alias is not None:
+        preset.remove_options(model_id, key_names("alias"))
+        preset.set(model_id, "alias", alias)
 
     # Sync GGUF sampling params into preset (only for keys not already set)
     _sync_sampling_params(model_id, preset)
@@ -1113,16 +1111,10 @@ def download(model_id: str | None = None, alias: str | None = None) -> None:
 
     write_preset(preset)
 
-    if is_new:
-        msg = f"Added [bold]{model_id}[/bold]"
-        if alias:
-            msg += f" (alias: {alias})"
-        msg += " to preset file."
-        console.print(msg, style="green")
-    else:
-        console.print(
-            f"[bold]{model_id}[/bold] is ready.", style="green"
-        )
+    msg = f"[bold]{model_id}[/bold] is ready"
+    if alias:
+        msg += f" (alias: {alias})"
+    console.print(msg + ".", style="green")
 
 
 # ---------------------------------------------------------------------------
@@ -1196,8 +1188,7 @@ def _pick_remove_interactive() -> str:
     require_tty()
 
     with console.status("Loading models…", spinner="dots"):
-        preset = read_preset()
-        sections = [s for s in preset.sections() if s != "*"]
+        sections = all_model_ids()
         sizes = compute_model_sizes()
         partial = _find_partial_downloads()
         partial_ids = {p["model_id"] for p in partial}
@@ -1407,10 +1398,15 @@ def remove(
         section = resolve_model(model_id_or_alias)
         if section is None:
             console.print(
-                f"Model '{model_id_or_alias}' not found in preset file.",
+                f"Model '{model_id_or_alias}' not found.",
                 style="red",
             )
             raise SystemExit(1)
+
+    if model_source(section) != ("hf", section):
+        # A section that defines a model under a name of its own: removing
+        # it drops the name, and the weights stay for whatever else uses them.
+        keep_files = True
 
     if not _confirm_remove(section, keep_files):
         return

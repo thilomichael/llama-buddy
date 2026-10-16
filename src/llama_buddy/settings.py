@@ -1,120 +1,99 @@
-"""Settings management and interactive settings editor."""
+"""Settings editor for the preset's ``[*]`` section and per-model sections.
+
+Every setting is a llama-server flag written into the preset file, so the
+router applies it and nothing has to be passed on the command line, where
+it would override per-model values. Only the port lives elsewhere: the
+router owns it, so it goes in llama.cpp's own config.ini.
+"""
 
 from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, fields
 
 from rich.live import Live
 from rich.text import Text
 
-from llama_buddy.capabilities import filter_supported, has_flag, has_value
-from llama_buddy.config import CONFIG_DIR, ensure_config_dir, read_preset, write_preset
+from llama_buddy.capabilities import filter_supported
+from llama_buddy.config import (
+    CONFIG_DIR,
+    DEFAULT_PORT,
+    get_port,
+    key_names,
+    read_preset,
+    set_port,
+    write_preset,
+)
 from llama_buddy.console import console
+from llama_buddy.ini import IniFile
 from llama_buddy.tui import read_key, require_tty
 
+# Where releases before 0.1.16 kept the global settings.
 SETTINGS_FILE = CONFIG_DIR / "settings.json"
 
+PORT_META = {
+    "label": "Port",
+    "description": "Server listen port (stored in llama.cpp's config.ini)",
+    "type": "int",
+    "default": str(DEFAULT_PORT),
+}
 
-@dataclass
-class Settings:
-    port: int = 8080
-    idle_timeout: int = 300
-    jinja: bool = True
-    flash_attention: str = "auto"
-    ctx_size: int = 8192
-    gpu_layers: str = "auto"
-    load_mode: str = "auto"
-    lazy_mode: str = "auto"
-    kv_unified_per_slot: int = 0
-
-    def to_server_args(self) -> list[str]:
-        """Convert settings to llama-server CLI arguments.
-
-        Flags the installed llama-server does not know are left out, and so
-        are values it does not accept: build 10344 has no ``--load-mode
-        auto``. llama-server refuses to start on either, so emitting one
-        would take the whole server down rather than degrade a single
-        setting. Dropping the flag leaves llama-server's own default.
-        """
-        args: list[str] = []
-        args.extend(["--port", str(self.port)])
-        # llama-server rejects 0 here: -1 disables sleeping, and any value
-        # above 0 is the idle timeout in seconds.
-        sleep_seconds = self.idle_timeout if self.idle_timeout > 0 else -1
-        args.extend(["--sleep-idle-seconds", str(sleep_seconds)])
-        if self.jinja:
-            args.append("--jinja")
-        else:
-            args.append("--no-jinja")
-        args.extend(["--flash-attn", self.flash_attention])
-        if self.ctx_size > 0:
-            args.extend(["--ctx-size", str(self.ctx_size)])
-        args.extend(["--gpu-layers", self.gpu_layers])
-        if has_flag("--load-mode") and has_value("--load-mode", self.load_mode):
-            args.extend(["--load-mode", self.load_mode])
-        if has_flag("--lazy-mode") and has_value("--lazy-mode", self.lazy_mode):
-            args.extend(["--lazy-mode", self.lazy_mode])
-        if self.kv_unified_per_slot > 0 and has_flag("--kv-unified-per-slot"):
-            args.extend(
-                ["--kv-unified-per-slot", str(self.kv_unified_per_slot)]
-            )
-        return args
-
-
-# Display metadata for each global setting
-SETTING_META: dict[str, dict] = {
-    "port": {
-        "label": "Port",
-        "description": "Server listen port",
-        "type": "int",
-    },
-    "idle_timeout": {
+# Settings for every model, kept in the preset's [*] section. The defaults
+# are llama-server's own; a setting left at its default is not written.
+GLOBAL_SETTING_META: dict[str, dict] = {
+    "sleep-idle-seconds": {
         "label": "Idle Timeout",
         "description": "Seconds before an idle model sleeps (-1 = never)",
         "type": "int",
+        "default": "-1",
+    },
+    "c": {
+        "label": "Context Size",
+        "description": "Prompt context size (0 = from model, fit to memory)",
+        "type": "int",
+        "default": "0",
     },
     "jinja": {
         "label": "Jinja Templates",
         "description": "Use Jinja template engine for chat",
         "type": "bool",
+        "default": "true",
     },
-    "flash_attention": {
+    "fa": {
         "label": "Flash Attention",
         "description": "Flash Attention mode",
         "type": "choice",
         "choices": ["auto", "on", "off"],
+        "default": "auto",
     },
-    "ctx_size": {
-        "label": "Context Size",
-        "description": "Prompt context size (0 = model default)",
-        "type": "int",
-    },
-    "gpu_layers": {
+    "ngl": {
         "label": "GPU Layers",
-        "description": "Layers to offload to GPU",
+        "description": "Layers to offload to GPU (0 = CPU only)",
         "type": "choice",
-        "choices": ["auto", "all", "none"],
+        "choices": ["auto", "all", "0"],
+        "default": "auto",
     },
-    "load_mode": {
+    "load-mode": {
         "label": "Load Mode",
         "description": "How model weights are read (replaces mmap/mlock)",
         "type": "choice",
         "choices": ["auto", "none", "mmap", "mlock", "mmap+mlock", "dio"],
+        "default": "auto",
         "flag": "--load-mode",
     },
-    "lazy_mode": {
+    "lazy-mode": {
         "label": "Lazy Mode",
         "description": "Read large tensors on demand instead of resident",
         "type": "choice",
         "choices": ["auto", "on", "off"],
+        "default": "auto",
         "flag": "--lazy-mode",
     },
-    "kv_unified_per_slot": {
+    "kv-unified-per-slot": {
         "label": "KV Per Slot",
         "description": "Context limit per parallel slot (0 = unset)",
         "type": "int",
+        "default": "0",
         "flag": "--kv-unified-per-slot",
     },
 }
@@ -135,9 +114,9 @@ MODEL_SETTING_META: dict[str, dict] = {
     },
     "ngl": {
         "label": "GPU Layers",
-        "description": "Override GPU layers",
+        "description": "Override GPU layers (0 = CPU only)",
         "type": "choice",
-        "choices": ["auto", "all", "none"],
+        "choices": ["auto", "all", "0"],
         "default": "auto",
     },
     "fa": {
@@ -179,25 +158,78 @@ MODEL_SETTING_META: dict[str, dict] = {
 }
 
 
-def load_settings() -> Settings:
-    if SETTINGS_FILE.exists():
-        try:
-            data = json.loads(SETTINGS_FILE.read_text())
-            known = {f.name for f in fields(Settings)}
-            settings = Settings(**{k: v for k, v in data.items() if k in known})
-            # Earlier versions documented 0 as "never sleep" and wrote it
-            # through to llama-server, which refuses to start on it.
-            if settings.idle_timeout == 0:
-                settings.idle_timeout = -1
-            return settings
-        except (json.JSONDecodeError, TypeError):
-            pass
-    return Settings()
+# settings.json field → [*] key, and the value llb used when the field was
+# missing. A value equal to llama-server's own default is not written.
+_SETTINGS_JSON_KEYS: dict[str, tuple[str, object]] = {
+    "idle_timeout": ("sleep-idle-seconds", 300),
+    "ctx_size": ("c", 8192),
+    "jinja": ("jinja", True),
+    "flash_attention": ("fa", "auto"),
+    "gpu_layers": ("ngl", "auto"),
+    "load_mode": ("load-mode", "auto"),
+    "lazy_mode": ("lazy-mode", "auto"),
+    "kv_unified_per_slot": ("kv-unified-per-slot", 0),
+}
 
 
-def save_settings(settings: Settings) -> None:
-    ensure_config_dir()
-    SETTINGS_FILE.write_text(json.dumps(asdict(settings), indent=2) + "\n")
+def migrate_settings_file(preset: IniFile) -> bool:
+    """Move settings.json into the preset's ``[*]`` and config.ini, once.
+
+    llb used to pass these as router flags, which override every preset
+    value, so they win over whatever ``[*]`` said before. Returns True when
+    the preset was changed.
+    """
+    if not SETTINGS_FILE.exists():
+        return False
+    try:
+        data = json.loads(SETTINGS_FILE.read_text())
+    except (json.JSONDecodeError, OSError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+
+    changed = False
+    for field, (key, old_default) in _SETTINGS_JSON_KEYS.items():
+        value = data.get(field, old_default)
+        if isinstance(value, bool):
+            value = "true" if value else "false"
+        value = str(value)
+        # 0 used to mean "never sleep", which llama-server rejects.
+        if key == "sleep-idle-seconds" and value == "0":
+            value = "-1"
+        # llb offered "none", which llama-server cannot parse.
+        if key == "ngl" and value == "none":
+            value = "0"
+        names = key_names(key)
+        if value == GLOBAL_SETTING_META[key]["default"]:
+            changed = preset.remove_options("*", names) or changed
+        elif preset.get_any("*", names) != value:
+            preset.remove_options("*", names)
+            preset.set("*", key, value)
+            changed = True
+
+    try:
+        port = int(data.get("port", DEFAULT_PORT))
+    except (TypeError, ValueError):
+        port = DEFAULT_PORT
+    if port != get_port():
+        set_port(port)
+
+    SETTINGS_FILE.unlink(missing_ok=True)
+    console.print(
+        "Moved settings from settings.json into the preset's [*] section.",
+        style="dim",
+    )
+    return changed
+
+
+def _set_option(
+    preset: IniFile, section: str, key: str, value: str, default: str,
+) -> None:
+    """Write a setting under llb's spelling, or drop it when it is the default."""
+    preset.remove_options(section, key_names(key))
+    if value != default:
+        preset.set(section, key, value)
 
 
 # ---------------------------------------------------------------------------
@@ -400,24 +432,41 @@ def _run_kv_editor(
 # ---------------------------------------------------------------------------
 
 
-def edit_settings() -> None:
-    """Interactive settings editor with model settings sub-menu."""
-    settings = load_settings()
+def edit_settings() -> bool:
+    """Interactive settings editor with model settings sub-menu.
+
+    Returns True when the port changed, which takes a restart rather than a
+    reload of the model list.
+    """
+    preset = read_preset()
+    port = get_port()
+    meta_map = {"port": PORT_META, **filter_supported(GLOBAL_SETTING_META)}
+    # The model sub-menu writes the preset too, so global edits are kept
+    # apart and applied to a fresh read on save.
+    pending: dict[str, str] = {}
 
     def get_value(key: str) -> str:
-        return str(getattr(settings, key))
+        if key in pending:
+            return pending[key]
+        if key == "port":
+            return str(port)
+        default = meta_map[key]["default"]
+        return preset.get_any("*", key_names(key), default) or default
 
     def set_value(key: str, value: str) -> None:
-        meta = SETTING_META[key]
-        if meta["type"] == "int":
-            setattr(settings, key, int(value))
-        elif meta["type"] == "bool":
-            setattr(settings, key, value in ("True", "true", "1", "on"))
-        else:
-            setattr(settings, key, value)
+        # llama-server rejects 0 here; -1 is "never".
+        if key == "sleep-idle-seconds" and value == "0":
+            value = "-1"
+        pending[key] = value
 
     def on_save() -> None:
-        save_settings(settings)
+        current = read_preset()
+        for key, value in pending.items():
+            if key != "port":
+                _set_option(current, "*", key, value, meta_map[key]["default"])
+        write_preset(current)
+        if "port" in pending:
+            set_port(int(pending["port"]))
         console.print("Settings saved.", style="green")
 
     def on_extra(idx: int) -> None:
@@ -426,13 +475,14 @@ def edit_settings() -> None:
 
     _run_kv_editor(
         title="Settings",
-        meta_map=filter_supported(SETTING_META),
+        meta_map=meta_map,
         get_value=get_value,
         set_value=set_value,
         on_save=on_save,
         extra_items=["Model Settings >"],
         on_extra=on_extra,
     )
+    return "port" in pending and int(pending["port"]) != port
 
 
 # ---------------------------------------------------------------------------
@@ -451,10 +501,11 @@ def _edit_model_settings() -> None:
 def _build_model_meta(model_id: str, preset) -> dict[str, dict]:
     """Build meta map for a model, including any custom keys from the INI."""
     meta = filter_supported(MODEL_SETTING_META)
+    known = {name for key in MODEL_SETTING_META for name in key_names(key)}
     # Add any existing keys not in the standard set
     if preset.has_section(model_id):
         for key in preset.options(model_id):
-            if key not in meta and key != "version":
+            if key not in known:
                 meta[key] = {
                     "label": key,
                     "description": "Custom setting",
@@ -477,10 +528,11 @@ def _sync_draft_model_path(model_id: str, preset) -> None:
     from llama_buddy.config import find_model_mtp_file
     from llama_buddy.models import draft_model_loads
 
-    if preset.get(model_id, "spec-type", fallback="") != "draft-mtp":
-        preset.remove_option(model_id, "spec-draft-model")
+    path_names = key_names("spec-draft-model")
+    if preset.get_any(model_id, key_names("spec-type")) != "draft-mtp":
+        preset.remove_options(model_id, path_names)
         return
-    if preset.has_option(model_id, "spec-draft-model"):
+    if preset.get_any(model_id, path_names) is not None:
         return
     draft = find_model_mtp_file(model_id)
     if draft is None:
@@ -509,14 +561,11 @@ def _edit_single_model(model_id: str) -> None:
 
     def get_value(key: str) -> str:
         default = meta_map[key].get("default", "")
-        return preset.get(model_id, key, fallback=default)
+        return preset.get_any(model_id, key_names(key), default) or default
 
     def set_value(key: str, value: str) -> None:
         default = meta_map[key].get("default", "")
-        if value == default:
-            preset.remove_option(model_id, key)
-        else:
-            preset.set(model_id, key, value)
+        _set_option(preset, model_id, key, value, default)
 
     def on_save() -> None:
         _sync_draft_model_path(model_id, preset)
