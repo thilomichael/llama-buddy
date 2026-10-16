@@ -76,6 +76,22 @@ def test_compute_model_sizes_multi_shard(tmp_path, monkeypatch):
     assert sizes == {"org/big-model-GGUF": 3000}
 
 
+def test_compute_model_sizes_skips_partial_download(tmp_path, monkeypatch):
+    monkeypatch.setattr("llama_buddy.models.get_hf_hub_dir", lambda: tmp_path)
+
+    snapshot = tmp_path / "models--org--model-GGUF" / "snapshots" / "abc123"
+    snapshot.mkdir(parents=True)
+    blobs = tmp_path / "models--org--model-GGUF" / "blobs"
+    blobs.mkdir(parents=True)
+    (blobs / "done").write_bytes(b"x" * 1000)
+    (snapshot / "model-Q8_0.gguf").symlink_to("../../blobs/done")
+    # The downloader links the snapshot before the blob is complete
+    (blobs / "pending.downloadInProgress").write_bytes(b"x" * 10)
+    (snapshot / "model-Q4_K_M.gguf").symlink_to("../../blobs/pending")
+
+    sizes = compute_model_sizes()
+    assert sizes == {"org/model-GGUF": 1000}
+
 def test_format_mib_gigabytes():
     assert _format_mib(2048.0) == "2.0G"
 

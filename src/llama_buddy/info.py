@@ -125,7 +125,7 @@ def show_info(model_id_or_path: str) -> None:
         raise SystemExit(1)
 
     path = gguf_files[0]
-    total_size = sum(f.stat().st_size for f in gguf_files)
+    total_size = sum(f.stat().st_size for f in gguf_files if f.exists())
 
     try:
         meta = read_metadata(path)

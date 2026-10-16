@@ -1353,7 +1353,7 @@ def _confirm_remove(section: str, keep_files: bool) -> bool:
     draft = find_model_draft_file(section)
     if draft is not None:
         files.append(draft)
-    total_size = sum(f.stat().st_size for f in files)
+    total_size = sum(f.stat().st_size for f in files if f.exists())
     siblings = get_model_groups().get(section, [])
 
     info_lines: list[tuple[str, str]] = []

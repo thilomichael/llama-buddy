@@ -61,6 +61,9 @@ def compute_model_sizes() -> dict[str, int]:
             for f in snapshots.glob("**/*.gguf"):
                 if "mmproj" in f.name or is_draft_file(f.name):
                     continue
+                # A partial download is a symlink whose blob isn't there yet
+                if not f.exists():
+                    continue
                 resolved = str(f.resolve())
                 if resolved not in seen:
                     seen.add(resolved)
